@@ -4,7 +4,24 @@
     <div class="sidebar">
       <div class="sidebar-header">
         <h1>知识图谱</h1>
-        <span class="badge">{{ nodes.length }} 节点</span>
+        <div class="header-meta">
+          <span class="badge">{{ nodes.length }} 节点</span>
+          <span class="user-info" :title="student?.email">
+            <span class="avatar">{{ student?.name?.charAt(0) }}</span>
+            {{ student?.name }}
+          </span>
+          <button class="btn-logout" @click="$emit('logout')" title="退出登录">&#10005;</button>
+        </div>
+      </div>
+
+      <!-- 课程选择器 -->
+      <div class="course-selector">
+        <select v-model="currentCourseId" @change="onCourseChange">
+          <option value="">-- 选择课程 --</option>
+          <option v-for="c in courses" :key="c.id" :value="c.id">
+            {{ c.name }} ({{ c.node_count || 0 }})
+          </option>
+        </select>
       </div>
 
       <div class="sidebar-tabs">
@@ -16,16 +33,17 @@
       <div class="sidebar-content">
         <!-- 浏览标签 -->
         <div v-show="tab === 'browse'">
-          <KnowledgeSearch @locate="onLocateNode" />
-          <div class="cat-selector">
+          <KnowledgeSearch v-if="currentCourseId" :courseId="currentCourseId" @locate="onLocateNode" />
+          <div class="cat-selector" v-if="currentCourseId">
             <button :class="{ active: !selectedCategory }" @click="selectedCategory = ''; fetchGraph()">全部</button>
             <button
               v-for="cat in categories" :key="cat"
               :class="{ active: selectedCategory === cat }"
               @click="selectedCategory = cat; fetchGraph()"
-            >{{ cat }}</button>
+            >{{ cat.split('-').pop() }}</button>
           </div>
-          <div class="node-list">
+          <div v-if="!currentCourseId" class="empty-state">请先选择一门课程</div>
+          <div class="node-list" v-else>
             <div
               v-for="n in nodes" :key="n.id"
               class="node-item"
@@ -47,6 +65,7 @@
             ref="pathRecommendRef"
             :targetNode="selectedNode"
             :masteredIds="masteredIds"
+            :studentId="student?.id"
             @locate="onLocateNode"
             @clear="onClearPath"
             @path-found="onPathFound"
@@ -109,9 +128,9 @@
     <!-- 图谱主区域 -->
     <div class="main-area">
       <div class="graph-toolbar">
-        <button title="适应屏幕" @click="fitGraph">⊡</button>
+        <button title="适应屏幕" @click="fitGraph">&#8862;</button>
         <button title="放大" @click="zoomIn">+</button>
-        <button title="缩小" @click="zoomOut">−</button>
+        <button title="缩小" @click="zoomOut">-</button>
       </div>
 
       <KnowledgeGraph
@@ -143,7 +162,7 @@
       <KnowledgePanel
         v-if="selectedNode"
         :node="selectedNode"
-        @close="selectedNode = null"
+        @close="selectedNode = null; onClearPath()"
         @locate="onLocateNode"
         @show-roadmap="onShowRoadmap"
       />
@@ -153,11 +172,17 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { knowledgeApi, graphApi } from '../api/index.js'
+import { knowledgeApi, graphApi, courseApi } from '../api/index.js'
 import KnowledgeGraph from '../components/KnowledgeGraph.vue'
 import KnowledgeSearch from '../components/KnowledgeSearch.vue'
 import KnowledgePanel from '../components/KnowledgePanel.vue'
 import PathRecommend from '../components/PathRecommend.vue'
+
+const props = defineProps({
+  student: { type: Object, default: null },
+})
+
+const emit = defineEmits(['logout'])
 
 const graphRef = ref(null)
 const pathRecommendRef = ref(null)
@@ -170,6 +195,8 @@ const selectedCategory = ref('')
 const selectedNode = ref(null)
 const highlightedPath = ref([])
 const searchNodeId = ref(null)
+const courses = ref([])
+const currentCourseId = ref('')
 const masteredIds = ref([])
 
 const form = ref({ name: '', category: '', difficulty: 1, description: '' })
@@ -189,21 +216,52 @@ function getColor(cat) {
 }
 
 async function fetchGraph() {
+  if (!currentCourseId.value) {
+    nodes.value = []
+    links.value = []
+    return
+  }
   try {
-    const data = await graphApi.getGraph(selectedCategory.value || undefined)
+    const data = await graphApi.getGraph(
+      selectedCategory.value || undefined,
+      currentCourseId.value,
+      props.student?.id
+    )
     nodes.value = data.nodes || []
     links.value = data.links || []
+    nodes.value.forEach(n => {
+      n._mastery = data.nodes.find(x => x.id === n.id)?.mastery_score || 0
+    })
   } catch (e) {
     console.error('加载图谱失败', e)
   }
 }
 
 async function fetchCategories() {
+  if (!currentCourseId.value) {
+    categories.value = []
+    return
+  }
   try {
-    categories.value = await graphApi.getCategories()
+    categories.value = await graphApi.getCategories(currentCourseId.value)
   } catch {
     categories.value = []
   }
+}
+
+async function fetchCourses() {
+  try {
+    courses.value = await courseApi.list()
+  } catch {
+    courses.value = []
+  }
+}
+
+function onCourseChange() {
+  selectedNode.value = null
+  highlightedPath.value = []
+  fetchGraph()
+  fetchCategories()
 }
 
 function onSelectNode(node) {
@@ -242,8 +300,12 @@ function zoomIn() {}
 function zoomOut() {}
 
 async function onCreateNode() {
+  const payload = { ...form.value }
+  if (currentCourseId.value) {
+    payload.course_id = currentCourseId.value
+  }
   try {
-    await knowledgeApi.create({ ...form.value })
+    await knowledgeApi.create(payload)
     form.value = { name: '', category: '', difficulty: 1, description: '' }
     await fetchGraph()
     await fetchCategories()
@@ -253,7 +315,7 @@ async function onCreateNode() {
 }
 
 async function onDeleteNode() {
-  if (!selectedNode.value || !confirm(`确认删除「${selectedNode.value.name}」?`)) return
+  if (!selectedNode.value || !confirm('确认删除：' + selectedNode.value.name + '?')) return
   try {
     await knowledgeApi.delete(selectedNode.value.id)
     selectedNode.value = null
@@ -274,7 +336,6 @@ async function onCreateRelation() {
 }
 
 onMounted(async () => {
-  await fetchGraph()
-  await fetchCategories()
+  await fetchCourses()
 })
 </script>

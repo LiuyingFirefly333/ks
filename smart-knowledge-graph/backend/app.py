@@ -4,6 +4,8 @@ from config import FLASK_HOST, FLASK_PORT, FLASK_DEBUG
 from routes.knowledge import bp as knowledge_bp
 from routes.graph import bp as graph_bp
 from routes.recommend import bp as recommend_bp
+from routes.auth import bp as auth_bp
+from routes.course import bp as course_bp
 
 
 def create_app():
@@ -13,6 +15,8 @@ def create_app():
     app.register_blueprint(knowledge_bp)
     app.register_blueprint(graph_bp)
     app.register_blueprint(recommend_bp)
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(course_bp)
 
     @app.route("/api/health")
     def health():
