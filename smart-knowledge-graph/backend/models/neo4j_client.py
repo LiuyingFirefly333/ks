@@ -260,8 +260,9 @@ class Neo4jClient:
                 """
                 MATCH (c:Course)
                 OPTIONAL MATCH (n:KnowledgeNode)-[:BELONGS_TO]->(c)
-                RETURN c { .*, node_count: count(n) } as course
-                ORDER BY c.name
+                WITH c, count(n) as node_count
+                RETURN c { .*, node_count: node_count } as course
+                ORDER BY course.name
                 """
             )
             return [r["course"] for r in result]
