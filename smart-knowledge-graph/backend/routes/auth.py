@@ -30,14 +30,45 @@ def login():
     return jsonify({"student": student, "message": "登录成功"})
 
 
+@bp.route("/teacher/register", methods=["POST"])
+def register_teacher():
+    """教师注册"""
+    data = request.json
+    if not data or not data.get("name") or not data.get("email") or not data.get("password"):
+        return jsonify({"error": "name, email, password 不能为空"}), 400
+
+    teacher = db.register_teacher(data["name"], data["email"], data["password"])
+    if teacher is None:
+        return jsonify({"error": "该邮箱已被注册"}), 409
+    return jsonify({"teacher": teacher, "message": "注册成功"}), 201
+
+
+@bp.route("/teacher/login", methods=["POST"])
+def login_teacher():
+    """教师登录"""
+    data = request.json
+    if not data or not data.get("email") or not data.get("password"):
+        return jsonify({"error": "email 和 password 不能为空"}), 400
+
+    teacher = db.login_teacher(data["email"], data["password"])
+    if teacher is None:
+        return jsonify({"error": "邮箱或密码错误"}), 401
+    return jsonify({"teacher": teacher, "message": "登录成功"})
+
+
 @bp.route("/me", methods=["GET"])
 def me():
-    """获取当前登录用户信息"""
+    """获取当前登录用户信息（学生或教师）"""
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
     if not token:
         return jsonify({"error": "未登录"}), 401
 
-    student = db.get_student_by_token(token)
-    if not student:
+    role = request.args.get("role", "student")
+    if role == "teacher":
+        user = db.get_teacher_by_token(token)
+    else:
+        user = db.get_student_by_token(token)
+
+    if not user:
         return jsonify({"error": "登录已过期，请重新登录"}), 401
-    return jsonify({"student": student})
+    return jsonify({"user": user, "role": role})

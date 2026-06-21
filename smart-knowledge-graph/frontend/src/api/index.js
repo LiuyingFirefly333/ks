@@ -21,14 +21,18 @@ export const authApi = {
     api.post('/auth/register', { name, email, password }).then(r => r.data),
   login: (email, password) =>
     api.post('/auth/login', { email, password }).then(r => r.data),
-  me: () => api.get('/auth/me').then(r => r.data),
+  me: (role = 'student') => api.get('/auth/me', { params: { role } }).then(r => r.data),
+  registerTeacher: (name, email, password) =>
+    api.post('/auth/teacher/register', { name, email, password }).then(r => r.data),
+  loginTeacher: (email, password) =>
+    api.post('/auth/teacher/login', { email, password }).then(r => r.data),
 }
 
 // ===== 课程 =====
 export const courseApi = {
   list: () => api.get('/courses').then(r => r.data),
   get: (id) => api.get(`/courses/${id}`).then(r => r.data),
-  create: (data) => api.post('/courses', data).then(r => r.data),
+  create: (data, teacherId) => api.post('/courses', { ...data, teacher_id: teacherId }).then(r => r.data),
 }
 
 // 知识点

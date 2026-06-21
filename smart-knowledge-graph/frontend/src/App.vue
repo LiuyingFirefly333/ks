@@ -1,6 +1,6 @@
 <template>
-  <LoginView v-if="!student" @login-success="onLoginSuccess" />
-  <DashboardView v-else :student="student" @logout="onLogout" />
+  <LoginView v-if="!user" @login-success="onLoginSuccess" />
+  <DashboardView v-else :user="user" @logout="onLogout" />
 </template>
 
 <script setup>
@@ -9,29 +9,33 @@ import LoginView from './views/LoginView.vue'
 import DashboardView from './views/DashboardView.vue'
 import { authApi } from './api/index.js'
 
-const student = ref(null)
+const user = ref(null)
 
-function onLoginSuccess(s) {
-  student.value = s
+function onLoginSuccess(u) {
+  user.value = u
 }
 
 function onLogout() {
   localStorage.removeItem('token')
-  localStorage.removeItem('student')
-  student.value = null
+  localStorage.removeItem('user')
+  localStorage.removeItem('role')
+  user.value = null
 }
 
 onMounted(async () => {
   const token = localStorage.getItem('token')
-  if (token) {
+  const savedRole = localStorage.getItem('role') || 'student'
+  if (token && savedRole) {
     try {
-      const data = await authApi.me()
-      if (data.student) {
-        student.value = data.student
+      const data = await authApi.me(savedRole)
+      if (data.user) {
+        user.value = { ...data.user, role: data.role }
+        localStorage.setItem('role', data.role)
       }
     } catch {
       localStorage.removeItem('token')
-      localStorage.removeItem('student')
+      localStorage.removeItem('user')
+      localStorage.removeItem('role')
     }
   }
 })

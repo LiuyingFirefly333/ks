@@ -6,9 +6,9 @@
         <h1>知识图谱</h1>
         <div class="header-meta">
           <span class="badge">{{ nodes.length }} 节点</span>
-          <span class="user-info" :title="student?.email">
-            <span class="avatar">{{ student?.name?.charAt(0) }}</span>
-            {{ student?.name }}
+          <span class="user-info" :title="user?.email">
+            <span class="avatar" :class="{ teacher: isTeacher }">{{ user?.name?.charAt(0) }}</span>
+            {{ user?.name }}
           </span>
           <button class="btn-logout" @click="$emit('logout')" title="退出登录">&#10005;</button>
         </div>
@@ -65,7 +65,7 @@
             ref="pathRecommendRef"
             :targetNode="selectedNode"
             :masteredIds="masteredIds"
-            :studentId="student?.id"
+        :studentId="user?.id"
             @locate="onLocateNode"
             @clear="onClearPath"
             @path-found="onPathFound"
@@ -171,7 +171,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { knowledgeApi, graphApi, courseApi } from '../api/index.js'
 import KnowledgeGraph from '../components/KnowledgeGraph.vue'
 import KnowledgeSearch from '../components/KnowledgeSearch.vue'
@@ -179,10 +179,12 @@ import KnowledgePanel from '../components/KnowledgePanel.vue'
 import PathRecommend from '../components/PathRecommend.vue'
 
 const props = defineProps({
-  student: { type: Object, default: null },
+  user: { type: Object, default: null },
 })
 
 const emit = defineEmits(['logout'])
+
+const isTeacher = computed(() => props.user?.role === 'teacher')
 
 const graphRef = ref(null)
 const pathRecommendRef = ref(null)
@@ -203,6 +205,7 @@ const form = ref({ name: '', category: '', difficulty: 1, description: '' })
 const relSource = ref('')
 const relTarget = ref('')
 const relType = ref('PREREQUISITE')
+const courseForm = ref({ name: '', description: '' })
 
 function getColor(cat) {
   const map = {
@@ -225,7 +228,7 @@ async function fetchGraph() {
     const data = await graphApi.getGraph(
       selectedCategory.value || undefined,
       currentCourseId.value,
-      props.student?.id
+      props.user?.id
     )
     nodes.value = data.nodes || []
     links.value = data.links || []
@@ -332,6 +335,16 @@ async function onCreateRelation() {
     await fetchGraph()
   } catch {
     alert('建立关系失败')
+  }
+}
+
+async function onCreateCourse() {
+  try {
+    await courseApi.create({ ...courseForm.value }, props.user?.id)
+    courseForm.value = { name: '', description: '' }
+    await fetchCourses()
+  } catch (e) {
+    alert('创建课程失败: ' + (e.response?.data?.error || e.message))
   }
 }
 

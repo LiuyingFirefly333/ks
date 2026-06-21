@@ -24,7 +24,8 @@ def create_course():
         "name": data["name"],
         "description": data.get("description", ""),
     }
-    course = db.create_course(course_data)
+    teacher_id = data.get("teacher_id")
+    course = db.create_course(course_data, teacher_id)
     return jsonify(course), 201
 
 

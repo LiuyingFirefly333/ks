@@ -11,6 +11,11 @@
         <button :class="{ active: mode === 'register' }" @click="mode = 'register'; clearError()">注册</button>
       </div>
 
+      <div class="role-tabs">
+        <button :class="{ active: role === 'student' }" @click="role = 'student'">学生</button>
+        <button :class="{ active: role === 'teacher' }" @click="role = 'teacher'">教师</button>
+      </div>
+
       <form @submit.prevent="handleSubmit" class="login-form">
         <div class="row" v-if="mode === 'register'">
           <label>姓名</label>
@@ -42,6 +47,7 @@ const mode = ref('login')
 const loading = ref(false)
 const error = ref('')
 const form = reactive({ name: '', email: '', password: '' })
+const role = ref('student')
 
 function clearError() {
   error.value = ''
@@ -60,15 +66,21 @@ async function handleSubmit() {
   error.value = ''
   try {
     let result
-    if (mode.value === 'login') {
+    if (mode.value === 'login' && role.value === 'student') {
       result = await authApi.login(form.email, form.password)
-    } else {
+    } else if (mode.value === 'login' && role.value === 'teacher') {
+      result = await authApi.loginTeacher(form.email, form.password)
+    } else if (mode.value === 'register' && role.value === 'student') {
       result = await authApi.register(form.name, form.email, form.password)
+    } else {
+      result = await authApi.registerTeacher(form.name, form.email, form.password)
     }
-    if (result.student && result.student.token) {
-      localStorage.setItem('token', result.student.token)
-      localStorage.setItem('student', JSON.stringify(result.student))
-      emit('login-success', result.student)
+    const user = result.student || result.teacher
+    if (user && user.token) {
+      localStorage.setItem('token', user.token)
+      localStorage.setItem('user', JSON.stringify({ ...user, role: role.value }))
+      localStorage.setItem('role', role.value)
+      emit('login-success', { ...user, role: role.value })
     }
   } catch (e) {
     error.value = e.response?.data?.error || '操作失败，请重试'
@@ -171,3 +183,24 @@ async function handleSubmit() {
   margin-bottom: 10px;
 }
 </style>
+.role-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.role-tabs button {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.role-tabs button.active {
+  background: var(--accent-green);
+  color: #fff;
+}

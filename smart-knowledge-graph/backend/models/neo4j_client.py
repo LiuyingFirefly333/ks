@@ -239,7 +239,7 @@ class Neo4jClient:
 
     # ===== 课程管理 =====
 
-    def create_course(self, course_data: dict) -> dict:
+    def create_course(self, course_data: dict, teacher_id: str = None) -> dict:
         with self.driver.session() as session:
             result = session.run(
                 """
@@ -252,7 +252,17 @@ class Neo4jClient:
                 name=course_data["name"],
                 description=course_data.get("description", ""),
             )
-            return result.single()["course"]
+            course = result.single()["course"]
+            if teacher_id:
+                session.run(
+                    """
+                    MATCH (t:Teacher {id: $teacher_id})
+                    MATCH (c:Course {id: $course_id})
+                    CREATE (t)-[:OWNS]->(c)
+                    """,
+                    teacher_id=teacher_id, course_id=course["id"],
+                )
+            return course
 
     def list_courses(self) -> list[dict]:
         with self.driver.session() as session:
@@ -327,6 +337,69 @@ class Neo4jClient:
             )
             record = result.single()
             return record["student"] if record else None
+
+    # ===== 教师管理 =====
+
+    def register_teacher(self, name: str, email: str, password: str) -> dict | None:
+        with self.driver.session() as session:
+            existing = session.run(
+                "MATCH (t:Teacher {email: $email}) RETURN t LIMIT 1", email=email
+            ).single()
+            if existing:
+                return None
+
+            teacher_id = str(uuid.uuid4())
+            token = secrets.token_hex(32)
+            pw_hash = self._hash_password(password)
+            result = session.run(
+                """
+                CREATE (t:Teacher {
+                    id: $id, name: $name, email: $email,
+                    password_hash: $pw_hash, token: $token, created_at: datetime()
+                })
+                RETURN t { .id, .name, .email, .token, created_at: toString(t.created_at) } as teacher
+                """,
+                id=teacher_id, name=name, email=email, pw_hash=pw_hash, token=token,
+            )
+            return result.single()["teacher"]
+
+    def login_teacher(self, email: str, password: str) -> dict | None:
+        pw_hash = self._hash_password(password)
+        with self.driver.session() as session:
+            token = secrets.token_hex(32)
+            result = session.run(
+                """
+                MATCH (t:Teacher {email: $email, password_hash: $pw_hash})
+                SET t.token = $token
+                RETURN t { .id, .name, .email, .token, created_at: toString(t.created_at) } as teacher
+                """,
+                email=email, pw_hash=pw_hash, token=token,
+            )
+            record = result.single()
+            return record["teacher"] if record else None
+
+    def get_teacher_by_token(self, token: str) -> dict | None:
+        with self.driver.session() as session:
+            result = session.run(
+                "MATCH (t:Teacher {token: $token}) RETURN t { .id, .name, .email, created_at: toString(t.created_at) } as teacher",
+                token=token,
+            )
+            record = result.single()
+            return record["teacher"] if record else None
+
+    def get_teacher_courses(self, teacher_id: str) -> list[dict]:
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (t:Teacher {id: $teacher_id})-[:OWNS]->(c:Course)
+                OPTIONAL MATCH (n:KnowledgeNode)-[:BELONGS_TO]->(c)
+                WITH c, count(n) as node_count
+                RETURN c { .*, node_count: node_count } as course
+                ORDER BY course.name
+                """,
+                teacher_id=teacher_id,
+            )
+            return [r["course"] for r in result]
 
     # ===== 掌握度管理 =====
 
