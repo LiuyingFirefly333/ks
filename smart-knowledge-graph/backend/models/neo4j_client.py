@@ -297,7 +297,7 @@ class Neo4jClient:
                     id: $id, name: $name, email: $email,
                     password_hash: $pw_hash, token: $token, created_at: datetime()
                 })
-                RETURN s { .id, .name, .email, .token, .created_at } as student
+                RETURN s { .id, .name, .email, .token, created_at: toString(s.created_at) } as student
                 """,
                 id=student_id, name=name, email=email, pw_hash=pw_hash, token=token,
             )
@@ -311,7 +311,7 @@ class Neo4jClient:
                 """
                 MATCH (s:Student {email: $email, password_hash: $pw_hash})
                 SET s.token = $token
-                RETURN s { .id, .name, .email, .token, .created_at } as student
+                RETURN s { .id, .name, .email, .token, created_at: toString(s.created_at) } as student
                 """,
                 email=email, pw_hash=pw_hash, token=token,
             )
@@ -321,7 +321,7 @@ class Neo4jClient:
     def get_student_by_token(self, token: str) -> dict | None:
         with self.driver.session() as session:
             result = session.run(
-                "MATCH (s:Student {token: $token}) RETURN s { .id, .name, .email, .created_at } as student",
+                "MATCH (s:Student {token: $token}) RETURN s { .id, .name, .email, created_at: toString(s.created_at) } as student",
                 token=token,
             )
             record = result.single()
