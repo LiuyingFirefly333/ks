@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -27,3 +27,7 @@ Thumbs.db
 
 # Docker
 .docker/
+
+# Environment
+.env
+

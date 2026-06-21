@@ -6,8 +6,17 @@ bp = Blueprint("graph", __name__, url_prefix="/api/graph")
 
 @bp.route("", methods=["GET"])
 def get_graph():
-    """获取完整图谱数据（节点 + 关系），供 D3.js 渲染"""
+    """获取完整图谱数据（节点 + 关系），可按课程和分类过滤"""
+    course_id = request.args.get("course_id")
     category = request.args.get("category")
+    student_id = request.args.get("student_id")
+
+    if course_id and student_id:
+        data = db.get_graph_with_mastery(course_id, student_id, category)
+        return jsonify(data)
+    if course_id:
+        data = db.get_course_graph(course_id, category)
+        return jsonify(data)
     data = db.get_full_graph(category)
     return jsonify(data)
 
@@ -15,6 +24,10 @@ def get_graph():
 @bp.route("/categories", methods=["GET"])
 def get_categories():
     """获取所有知识点分类"""
+    course_id = request.args.get("course_id")
+    if course_id:
+        cats = db.list_course_categories(course_id)
+        return jsonify(cats)
     cats = db.list_categories()
     return jsonify(cats)
 

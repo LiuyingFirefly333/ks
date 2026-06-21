@@ -38,6 +38,7 @@ const emit = defineEmits(['locate', 'clear', 'path-found'])
 const props = defineProps({
   targetNode: { type: Object, default: null },
   masteredIds: { type: Array, default: () => [] },
+  studentId: { type: String, default: null },
 })
 
 const pathResult = ref([])
@@ -49,11 +50,16 @@ async function fetchPath(targetId) {
   error.value = ''
   pathResult.value = []
   try {
-    let mastered = props.masteredIds
-    if (!mastered.length) {
-      mastered = ['n1', 'n2']
+    let data
+    if (props.studentId) {
+      data = await recommendApi.recommendPathForStudent(props.studentId, targetId)
+    } else {
+      let mastered = props.masteredIds
+      if (!mastered.length) {
+        mastered = ['n1', 'n2']
+      }
+      data = await recommendApi.recommendPath(mastered, targetId)
     }
-    const data = await recommendApi.recommendPath(mastered, targetId)
     if (data.path && data.path.length) {
       pathResult.value = data.path
       emit('path-found', data.path)

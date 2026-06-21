@@ -3,6 +3,9 @@
 // 用法: cypher-shell -u neo4j -p password -f seed.cypher
 // ============================================================
 
+// ---- 创建课程 ----
+CREATE (:Course {id: 'course-math', name: '高等数学', description: '大学高等数学课程知识图谱，涵盖基础、极限、导数、积分、微分方程五大模块'});
+
 // ---- 创建知识点节点 ----
 
 // 基础
@@ -112,5 +115,13 @@ MATCH (a:KnowledgeNode {id: 'n16'}), (b:KnowledgeNode {id: 'n25'}) CREATE (a)-[:
 
 CREATE INDEX knowledge_node_id IF NOT EXISTS FOR (n:KnowledgeNode) ON (n.id);
 CREATE INDEX knowledge_node_category IF NOT EXISTS FOR (n:KnowledgeNode) ON (n.category);
+CREATE INDEX course_id IF NOT EXISTS FOR (c:Course) ON (c.id);
+CREATE INDEX student_id IF NOT EXISTS FOR (s:Student) ON (s.id);
+CREATE INDEX student_email IF NOT EXISTS FOR (s:Student) ON (s.email);
+CREATE INDEX student_token IF NOT EXISTS FOR (s:Student) ON (s.token);
+
+// ---- 绑定所有知识点到课程 ----
+MATCH (n:KnowledgeNode), (c:Course {id: 'course-math'})
+CREATE (n)-[:BELONGS_TO]->(c);
 
 RETURN '种子数据导入完成：高等数学 31 个知识点 + 50 条关系' AS message;

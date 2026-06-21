@@ -7,8 +7,12 @@ bp = Blueprint("knowledge", __name__, url_prefix="/api/knowledge")
 
 @bp.route("", methods=["GET"])
 def list_knowledge():
-    """获取知识点列表，可按分类筛选"""
+    """获取知识点列表，可按分类和课程筛选"""
+    course_id = request.args.get("course_id")
     category = request.args.get("category")
+    if course_id:
+        nodes = db.list_course_nodes(course_id, category)
+        return jsonify(nodes)
     nodes = db.list_nodes(category)
     return jsonify(nodes)
 
@@ -19,6 +23,10 @@ def search_knowledge():
     q = request.args.get("q", "")
     if not q:
         return jsonify([])
+    course_id = request.args.get("course_id")
+    if course_id:
+        nodes = db.search_course_nodes(course_id, q)
+        return jsonify(nodes)
     nodes = db.search_nodes(q)
     return jsonify(nodes)
 
@@ -45,6 +53,7 @@ def create_knowledge():
         "category": data.get("category", "未分类"),
         "difficulty": int(data.get("difficulty", 1)),
         "description": data.get("description", ""),
+        "course_id": data.get("course_id"),
     }
     node = db.create_node(node_data)
     return jsonify(node), 201

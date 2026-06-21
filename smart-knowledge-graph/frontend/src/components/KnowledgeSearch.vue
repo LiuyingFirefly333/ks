@@ -25,6 +25,9 @@ import { ref } from 'vue'
 import { knowledgeApi } from '../api/index.js'
 
 const emit = defineEmits(['locate'])
+const props = defineProps({
+  courseId: { type: String, default: null },
+})
 
 const query = ref('')
 const results = ref([])
@@ -39,7 +42,7 @@ function onSearch() {
   }
   debounceTimer = setTimeout(async () => {
     try {
-      results.value = await knowledgeApi.search(query.value.trim())
+      results.value = await knowledgeApi.search(query.value.trim(), props.courseId)
     } catch {
       results.value = []
     }
