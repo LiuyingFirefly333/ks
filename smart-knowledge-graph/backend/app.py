@@ -1,4 +1,4 @@
-﻿from flask import Flask
+from flask import Flask
 from flask_cors import CORS
 from flask.json.provider import DefaultJSONProvider
 from neo4j.time import DateTime, Date, Time
@@ -8,6 +8,7 @@ from routes.graph import bp as graph_bp
 from routes.recommend import bp as recommend_bp
 from routes.auth import bp as auth_bp
 from routes.course import bp as course_bp
+from routes.qa import bp as qa_bp
 
 
 class Neo4jJSONProvider(DefaultJSONProvider):
@@ -29,6 +30,7 @@ def create_app():
     app.register_blueprint(recommend_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(course_bp)
+    app.register_blueprint(qa_bp)
 
     @app.route("/api/health")
     def health():

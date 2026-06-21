@@ -36,6 +36,9 @@ class Neo4jClient:
                     category: $category,
                     difficulty: $difficulty,
                     description: $description,
+                    video_urls: $video_urls,
+                    exercises: $exercises,
+                    estimated_time: $estimated_time,
                     created_at: datetime()
                 })
                 RETURN n { .* } as node
@@ -45,6 +48,9 @@ class Neo4jClient:
                 category=node_data.get("category", ""),
                 difficulty=node_data.get("difficulty", 1),
                 description=node_data.get("description", ""),
+                video_urls=node_data.get("video_urls", []),
+                exercises=node_data.get("exercises", []),
+                estimated_time=node_data.get("estimated_time", 0),
             )
             node = result.single()["node"]
 
@@ -583,4 +589,47 @@ class Neo4jClient:
 
 
 # 全局单例
+    def expand_neighbors(self, node_ids: list[str]) -> list[dict]:
+        '''???????1??????RAG?????'''
+        with self.driver.session() as session:
+            result = session.run(
+                '''
+                UNWIND $ids AS nid
+                MATCH (n:KnowledgeNode {id: nid})-[r]-(m:KnowledgeNode)
+                WHERE NOT m.id IN $ids
+                RETURN DISTINCT m { .* } as node,
+                       r { .* } as rel,
+                       n.name as source_name
+                LIMIT 30
+                ''',
+                ids=node_ids,
+            )
+            return [
+                {"node": r["node"], "rel": r["rel"], "source_name": r["source_name"]}
+                for r in result
+            ]
+
+    def get_node_with_neighbors(self, node_id: str) -> dict | None:
+        '''?????????????????'''
+        with self.driver.session() as session:
+            result = session.run(
+                '''
+                MATCH (n:KnowledgeNode {id: $id})
+                OPTIONAL MATCH (n)-[r]-(m:KnowledgeNode)
+                RETURN n { .* } as node,
+                       collect(DISTINCT m { .* }) as neighbors,
+                       collect(DISTINCT r { .* }) as relations
+                ''',
+                id=node_id,
+            )
+            record = result.single()
+            if not record:
+                return None
+            return {
+                "node": record["node"],
+                "neighbors": [n for n in record["neighbors"] if n.get("id")],
+                "relations": [r for r in record["relations"] if r.get("type")],
+            }
+
+
 db = Neo4jClient()

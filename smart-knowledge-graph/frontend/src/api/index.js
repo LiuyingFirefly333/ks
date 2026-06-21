@@ -35,7 +35,7 @@ export const courseApi = {
   create: (data, teacherId) => api.post('/courses', { ...data, teacher_id: teacherId }).then(r => r.data),
 }
 
-// 知识点
+// 知识点 API
 export const knowledgeApi = {
   list: (category, courseId) => api.get('/knowledge', { params: { category, course_id: courseId } }).then(r => r.data),
   search: (q, courseId) => api.get('/knowledge/search', { params: { q, course_id: courseId } }).then(r => r.data),
@@ -75,4 +75,45 @@ export const recommendApi = {
     api.delete('/recommend/mastery', { data: { student_id: studentId, node_id: nodeId } }).then(r => r.data),
 }
 
+
+// AI 问答
 export default api
+
+// AI 问答
+export const qaApi = {
+  ask: (question, courseId, nodeId, sessionId) =>
+    api.post('/qa/ask', { question, course_id: courseId, node_id: nodeId, session_id: sessionId }).then(r => r.data),
+  askStream: (question, courseId, nodeId, sessionId, onToken, onSources, onDone, onError) => {
+    const token = localStorage.getItem('token')
+    return fetch('/api/qa/ask/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ question, course_id: courseId, node_id: nodeId, session_id: sessionId }),
+    }).then(async response => {
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(line.slice(6))
+              if (event.type === 'token') onToken(event.data)
+              else if (event.type === 'sources') onSources(event.data, event.session_id)
+              else if (event.type === 'done') onDone()
+              else if (event.type === 'error') onError(event.data)
+            } catch {}
+          }
+        }
+      }
+    }).catch(onError)
+  },
+}

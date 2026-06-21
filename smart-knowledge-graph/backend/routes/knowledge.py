@@ -63,7 +63,7 @@ def create_knowledge():
 def update_knowledge(node_id):
     """更新知识点"""
     data = request.json
-    allowed = {"name", "category", "difficulty", "description"}
+    allowed = {"name", "category", "difficulty", "description", "video_urls", "exercises", "estimated_time"}
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:
         return jsonify({"error": "没有可更新的字段"}), 400

@@ -42,6 +42,7 @@ const props = defineProps({
 })
 
 const pathResult = ref([])
+const totalTime = ref(0)
 const loading = ref(false)
 const error = ref('')
 
@@ -62,7 +63,7 @@ async function fetchPath(targetId) {
     }
     if (data.path && data.path.length) {
       pathResult.value = data.path
-      emit('path-found', data.path)
+      totalTime.value = data.total_estimated_time || 0; emit('path-found', data.path, totalTime.value)
     } else {
       const roadmap = await recommendApi.getRoadmap(targetId)
       if (roadmap.path && roadmap.path.length) {

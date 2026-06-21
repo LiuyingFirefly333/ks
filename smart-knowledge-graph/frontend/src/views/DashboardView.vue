@@ -1,6 +1,6 @@
-﻿<template>
+<template>
   <div class="app-layout">
-    <!-- 左侧面板 -->
+    <!-- 左侧面板-->
     <div class="sidebar">
       <div class="sidebar-header">
         <h1>知识图谱</h1>
@@ -14,10 +14,10 @@
         </div>
       </div>
 
-      <!-- 课程选择器 -->
+      <!-- 课程选择-->
       <div class="course-selector">
         <select v-model="currentCourseId" @change="onCourseChange">
-          <option value="">-- 选择课程 --</option>
+          <option value="">-- 选择课程--</option>
           <option v-for="c in courses" :key="c.id" :value="c.id">
             {{ c.name }} ({{ c.node_count || 0 }})
           </option>
@@ -28,10 +28,11 @@
         <button :class="{ active: tab === 'browse' }" @click="tab = 'browse'">浏览</button>
         <button :class="{ active: tab === 'path' }" @click="tab = 'path'">学习路径</button>
         <button :class="{ active: tab === 'manage' }" @click="tab = 'manage'">管理</button>
+        <button :class="{ active: tab === 'qa' }" @click="tab = 'qa'">AI 问答</button>
       </div>
 
       <div class="sidebar-content">
-        <!-- 浏览标签 -->
+        <!-- 浏览标签-->
         <div v-show="tab === 'browse'">
           <KnowledgeSearch v-if="currentCourseId" :courseId="currentCourseId" @locate="onLocateNode" />
           <div class="cat-selector" v-if="currentCourseId">
@@ -42,7 +43,7 @@
               @click="selectedCategory = cat; fetchGraph()"
             >{{ cat.split('-').pop() }}</button>
           </div>
-          <div v-if="!currentCourseId" class="empty-state">请先选择一门课程</div>
+          <div v-if="!currentCourseId" class="empty-state">请先选择课程</div>
           <div class="node-list" v-else>
             <div
               v-for="n in nodes" :key="n.id"
@@ -51,15 +52,18 @@
               @click="onSelectNode(n)"
             >
               <span>{{ n.name }}</span>
-              <span class="cat-tag">{{ n.category.split('-').pop() }}</span>
+              <span class="node-meta">
+                <span v-if="n.estimated_time" class="time-tag">{{ n.estimated_time }}?</span>
+                <span class="cat-tag">{{ n.category.split('-').pop() }}</span>
+              </span>
             </div>
           </div>
         </div>
 
-        <!-- 路径标签 -->
+        <!-- 路径推荐-->
         <div v-show="tab === 'path'">
           <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px">
-            点击图谱上的知识点查看推荐路径
+            鐐瑰嚮鍥捐氨涓婄殑鐭ヨ瘑鐐规煡鐪嬫帹鑽愯矾寰?
           </p>
           <PathRecommend
             ref="pathRecommendRef"
@@ -72,12 +76,18 @@
           />
         </div>
 
-        <!-- 管理标签 -->
+        <!-- 管理标签-->
+
+        <!-- AI 问答标签 -->
+        <div v-show="tab === 'qa'">
+          <ChatPanel :courseId="currentCourseId" :focusedNode="focusedNode" @locate="onLocateNode" @clear-focus="onClearFocus" />
+        </div>
+
         <div v-show="tab === 'manage'">
           <div class="manage-form">
             <div class="row">
               <label>知识点名称</label>
-              <input v-model="form.name" placeholder="如：导数的概念" />
+              <input v-model="form.name" placeholder="例如：导数的概念" />
             </div>
             <div class="row">
               <label>分类</label>
@@ -90,6 +100,14 @@
             <div class="row">
               <label>描述</label>
               <textarea v-model="form.description" rows="2"></textarea>
+            </div>
+            <div class="row">
+              <label>视频链接 (JSON)</label>
+              <input v-model="form.video_urls_str" placeholder='?: ["https://www.bilibili.com/video/BVxxx"]' />
+            </div>
+            <div class="row">
+              <label>练习链接 (JSON)</label>
+              <input v-model="form.exercises_str" placeholder='?: ["https://example.com/ex1", "https://example.com/ex2"]' />
             </div>
             <div class="form-actions">
               <button @click="onCreateNode" :disabled="!form.name">创建</button>
@@ -125,7 +143,7 @@
       </div>
     </div>
 
-    <!-- 图谱主区域 -->
+    <!-- 图谱主区域-->
     <div class="main-area">
       <div class="graph-toolbar">
         <button title="适应屏幕" @click="fitGraph">&#8862;</button>
@@ -143,7 +161,7 @@
         @select-node="onSelectNode"
       />
 
-      <!-- 图例 -->
+      <!-- 图例-->
       <div class="graph-legend">
         <div class="graph-legend-item"><span class="dot" style="background:#6366f1"></span> 基础</div>
         <div class="graph-legend-item"><span class="dot" style="background:#22c55e"></span> 极限</div>
@@ -158,13 +176,13 @@
         </div>
       </div>
 
-      <!-- 详情面板 -->
+      <!-- 详情面板-->
       <KnowledgePanel
         v-if="selectedNode"
         :node="selectedNode"
         @close="selectedNode = null; onClearPath()"
         @locate="onLocateNode"
-        @show-roadmap="onShowRoadmap"
+        @show-roadmap="onShowRoadmap" @ask-ai="onAskAI"
       />
     </div>
   </div>
@@ -177,6 +195,7 @@ import KnowledgeGraph from '../components/KnowledgeGraph.vue'
 import KnowledgeSearch from '../components/KnowledgeSearch.vue'
 import KnowledgePanel from '../components/KnowledgePanel.vue'
 import PathRecommend from '../components/PathRecommend.vue'
+import ChatPanel from '../components/ChatPanel.vue'
 
 const props = defineProps({
   user: { type: Object, default: null },
@@ -200,8 +219,9 @@ const searchNodeId = ref(null)
 const courses = ref([])
 const currentCourseId = ref('')
 const masteredIds = ref([])
+const focusedNode = ref(null)
 
-const form = ref({ name: '', category: '', difficulty: 1, description: '' })
+const form = ref({ name: '', category: '', difficulty: 1, estimated_time: 0, description: '', video_urls_str: '', exercises_str: '' })
 const relSource = ref('')
 const relTarget = ref('')
 const relType = ref('PREREQUISITE')
@@ -303,13 +323,21 @@ function zoomIn() {}
 function zoomOut() {}
 
 async function onCreateNode() {
-  const payload = { ...form.value }
+  const payload = {
+      name: form.value.name,
+      category: form.value.category,
+      difficulty: form.value.difficulty,
+      estimated_time: form.value.estimated_time,
+      description: form.value.description,
+    }
+    try { payload.video_urls = JSON.parse(form.value.video_urls_str || '[]') } catch { payload.video_urls = [] }
+    try { payload.exercises = JSON.parse(form.value.exercises_str || '[]') } catch { payload.exercises = [] }
   if (currentCourseId.value) {
     payload.course_id = currentCourseId.value
   }
   try {
     await knowledgeApi.create(payload)
-    form.value = { name: '', category: '', difficulty: 1, description: '' }
+    form.value = { name: '', category: '', difficulty: 1, estimated_time: 0, description: '', video_urls_str: '', exercises_str: '' }
     await fetchGraph()
     await fetchCategories()
   } catch (e) {
@@ -318,7 +346,7 @@ async function onCreateNode() {
 }
 
 async function onDeleteNode() {
-  if (!selectedNode.value || !confirm('确认删除：' + selectedNode.value.name + '?')) return
+  if (!selectedNode.value || !confirm('确认删除' + selectedNode.value.name + '?')) return
   try {
     await knowledgeApi.delete(selectedNode.value.id)
     selectedNode.value = null
@@ -344,10 +372,19 @@ async function onCreateCourse() {
     courseForm.value = { name: '', description: '' }
     await fetchCourses()
   } catch (e) {
-    alert('创建课程失败: ' + (e.response?.data?.error || e.message))
+    alert('创建课程失败' + (e.response?.data?.error || e.message))
   }
 }
 
+
+function onAskAI(node) {
+  focusedNode.value = node
+  tab.value = 'qa'
+}
+
+function onClearFocus() {
+  focusedNode.value = null
+}
 onMounted(async () => {
   await fetchCourses()
 })

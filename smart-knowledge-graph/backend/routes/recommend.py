@@ -20,7 +20,8 @@ def recommend_path():
     if data and data.get("student_id") and data.get("target"):
         path = db.recommend_path_for_student(data["student_id"], data["target"])
         if path:
-            return jsonify({"path": path, "count": len(path)})
+            total_time = sum(n.get("estimated_time", 0) or 0 for n in path)
+            return jsonify({"path": path, "count": len(path), "total_estimated_time": total_time})
         return jsonify({"error": "未找到可行路径", "path": []}), 404
 
     if not data or not data.get("mastered") or not data.get("target"):
@@ -28,7 +29,8 @@ def recommend_path():
     path = db.recommend_path(data["mastered"], data["target"])
     if path is None:
         return jsonify({"error": "未找到可行路径", "path": []}), 404
-    return jsonify({"path": path, "count": len(path)})
+    total_time = sum(n.get("estimated_time", 0) or 0 for n in path)
+    return jsonify({"path": path, "count": len(path), "total_estimated_time": total_time})
 
 
 @bp.route("/mastery", methods=["POST"])
@@ -103,4 +105,6 @@ def get_roadmap(target_id):
         record = result.single()
         if not record:
             return jsonify({"error": "未找到完整前置链路", "path": []}), 404
-        return jsonify({"path": record["nodes"]})
+        path_nodes = record["nodes"]
+        total_time = sum(n.get("estimated_time", 0) or 0 for n in path_nodes)
+        return jsonify({"path": path_nodes, "total_estimated_time": total_time})
