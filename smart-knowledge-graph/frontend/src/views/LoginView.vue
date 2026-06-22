@@ -70,8 +70,12 @@ async function handleSubmit() {
       result = await authApi.login(form.email, form.password)
     } else if (mode.value === 'login' && role.value === 'teacher') {
       result = await authApi.loginTeacher(form.email, form.password)
+    } else if (mode.value === 'login' && role.value === 'admin') {
+      result = await authApi.loginAdmin(form.email, form.password)
     } else if (mode.value === 'register' && role.value === 'student') {
       result = await authApi.register(form.name, form.email, form.password)
+    } else if (mode.value === 'register' && role.value === 'admin') {
+      result = await authApi.registerAdmin(form.name, form.email, form.password)
     } else {
       result = await authApi.registerTeacher(form.name, form.email, form.password)
     }

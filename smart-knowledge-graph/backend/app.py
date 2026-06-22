@@ -8,6 +8,11 @@ from routes.graph import bp as graph_bp
 from routes.recommend import bp as recommend_bp
 from routes.auth import bp as auth_bp
 from routes.course import bp as course_bp
+from routes.analytics import bp as analytics_bp
+from routes.classroom import bp as classroom_bp
+from routes.exam import bp as exam_bp
+from routes.admin import bp as admin_bp
+from routes.discuss import bp as discuss_bp
 from routes.qa import bp as qa_bp
 
 
@@ -30,6 +35,11 @@ def create_app():
     app.register_blueprint(recommend_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(course_bp)
+    app.register_blueprint(analytics_bp)
+    app.register_blueprint(classroom_bp)
+    app.register_blueprint(exam_bp)
+    app.register_blueprint(admin_bp)
+    app.register_blueprint(discuss_bp)
     app.register_blueprint(qa_bp)
 
     @app.route("/api/health")

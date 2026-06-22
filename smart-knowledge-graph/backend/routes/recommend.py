@@ -108,3 +108,40 @@ def get_roadmap(target_id):
         path_nodes = record["nodes"]
         total_time = sum(n.get("estimated_time", 0) or 0 for n in path_nodes)
         return jsonify({"path": path_nodes, "total_estimated_time": total_time})
+
+@bp.route("/path/easy", methods=["POST"])
+def recommend_easy():
+    """????????????"""
+    data = request.json
+    if data and data.get("student_id") and data.get("target"):
+        path = db.recommend_easy_path_for_student(data["student_id"], data["target"])
+        if path:
+            total_time = sum(n.get("estimated_time", 0) or 0 for n in path)
+            return jsonify({"path": path, "count": len(path), "total_estimated_time": total_time, "type": "easy"})
+        return jsonify({"error": "???????", "path": []}), 404
+    if not data or not data.get("mastered") or not data.get("target"):
+        return jsonify({"error": "?? mastered ? target"}), 400
+    path = db.recommend_easy_path(data["mastered"], data["target"])
+    if path is None:
+        return jsonify({"error": "???????", "path": []}), 404
+    total_time = sum(n.get("estimated_time", 0) or 0 for n in path)
+    return jsonify({"path": path, "count": len(path), "total_estimated_time": total_time, "type": "easy"})
+
+
+@bp.route("/path/thorough", methods=["POST"])
+def recommend_thorough():
+    """???????????????"""
+    data = request.json
+    if data and data.get("student_id") and data.get("target"):
+        path = db.recommend_thorough_path_for_student(data["student_id"], data["target"])
+        if path:
+            total_time = sum(n.get("estimated_time", 0) or 0 for n in path)
+            return jsonify({"path": path, "count": len(path), "total_estimated_time": total_time, "type": "thorough"})
+        return jsonify({"error": "???????", "path": []}), 404
+    if not data or not data.get("mastered") or not data.get("target"):
+        return jsonify({"error": "?? mastered ? target"}), 400
+    path = db.recommend_thorough_path(data["mastered"], data["target"])
+    if path is None:
+        return jsonify({"error": "???????", "path": []}), 404
+    total_time = sum(n.get("estimated_time", 0) or 0 for n in path)
+    return jsonify({"path": path, "count": len(path), "total_estimated_time": total_time, "type": "thorough"})
