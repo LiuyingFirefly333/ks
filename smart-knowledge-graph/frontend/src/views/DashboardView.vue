@@ -9,19 +9,10 @@
         </div>
       </div>
 
-      <nav class="topbar-center topnav" aria-label="功能选项">
-        <button
-          v-for="item in navItems"
-          :key="item.key"
-          class="topnav-item"
-          :class="{ active: activeNav === item.key }"
-          :title="item.hint"
-          @click="onNavClick(item.key)"
-        >
-          <span class="topnav-icon">{{ item.icon }}</span>
-          <span class="topnav-label">{{ item.label }}</span>
-        </button>
-      </nav>
+      <div class="topbar-center workspace-title">
+        <span>{{ currentNavLabel }}</span>
+        <small>{{ currentNavHint }}</small>
+      </div>
 
       <div class="topbar-user">
         <span class="user-role-badge">{{ roleLabel }}</span>
@@ -32,30 +23,58 @@
     </header>
 
     <div class="app-body">
-      <aside class="course-sidebar">
-        <div class="course-sidebar-head">
+      <aside class="course-sidebar workspace-sidebar">
+        <section class="sidebar-section">
+          <div class="course-sidebar-head">
+            <div>
+              <span class="sidebar-eyebrow">工作台</span>
+              <h2>功能导航</h2>
+            </div>
+          </div>
+
+          <nav class="sidebar-nav" aria-label="功能导航">
+            <button
+              v-for="item in navItems"
+              :key="item.key"
+              class="sidebar-nav-item"
+              :class="{ active: activeNav === item.key }"
+              :title="item.hint"
+              @click="onNavClick(item.key)"
+            >
+              <span class="sidebar-nav-icon">{{ item.icon }}</span>
+              <span>
+                <b>{{ item.label }}</b>
+                <small>{{ item.hint }}</small>
+              </span>
+            </button>
+          </nav>
+        </section>
+
+        <section class="sidebar-section course-section">
+          <div class="course-sidebar-head">
           <div>
             <span class="sidebar-eyebrow">课程</span>
             <h2>学习课程</h2>
           </div>
           <span class="course-count">{{ courses.length }}</span>
-        </div>
+          </div>
 
-        <div v-if="!courses.length" class="empty-state compact">暂无课程</div>
+          <div v-if="!courses.length" class="empty-state compact">暂无课程</div>
 
-        <div v-else class="course-list">
-          <button
-            v-for="c in courses"
-            :key="c.id"
-            class="course-item"
-            :class="{ active: currentCourseId === c.id }"
-            :title="c.name"
-            @click="selectCourse(c.id)"
-          >
-            <span class="course-name">{{ c.name }}</span>
-            <span v-if="currentCourseId === c.id" class="course-status">当前</span>
-          </button>
-        </div>
+          <div v-else class="course-list">
+            <button
+              v-for="c in courses"
+              :key="c.id"
+              class="course-item"
+              :class="{ active: currentCourseId === c.id }"
+              :title="c.name"
+              @click="selectCourse(c.id)"
+            >
+              <span class="course-name">{{ c.name }}</span>
+              <span v-if="currentCourseId === c.id" class="course-status">当前</span>
+            </button>
+          </div>
+        </section>
 
         <div v-if="user?.role === 'teacher'" class="sidebar-controls">
           <div class="form-row">
@@ -76,8 +95,8 @@
         </div>
       </aside>
 
-      <main class="main-content">
-        <div class="graph-stage">
+      <main class="main-content" :class="{ 'workspace-main': activeNav !== 'graph' }">
+        <div v-if="activeNav === 'graph'" class="graph-stage">
           <KnowledgeGraph
             ref="graphRef"
             :nodes="nodes"
@@ -97,13 +116,13 @@
           </div>
         </div>
 
-        <div class="floating-tools">
+        <div v-if="activeNav === 'graph'" class="floating-tools">
           <button title="适应画布" @click="fitGraph">适应</button>
           <button title="放大" @click="zoomIn">+</button>
           <button title="缩小" @click="zoomOut">-</button>
         </div>
 
-        <div class="floating-legend">
+        <div v-if="activeNav === 'graph'" class="floating-legend">
           <div class="legend-title">图例</div>
           <div class="legend-row"><span class="ldot" style="background:#2563eb"></span>知识点</div>
           <div class="legend-row"><span class="ldot" style="background:#16a34a"></span>熟练</div>
@@ -112,9 +131,146 @@
           <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#ef4444"></span>推荐路径</div>
           <div class="legend-row"><span style="display:inline-block;width:18px;height:0;border-top:2px dashed #94a3b8"></span>相关概念</div>
         </div>
+
+        <section v-if="activeNav !== 'graph'" class="workspace-page">
+          <div class="workspace-page-head">
+            <div>
+              <span class="sidebar-eyebrow">当前功能</span>
+              <h2>{{ currentNavLabel }}</h2>
+              <p>{{ currentNavHint }}</p>
+            </div>
+            <button class="soft-button" @click="activeNav = 'graph'">返回图谱</button>
+          </div>
+
+          <div class="workspace-page-body">
+            <div v-if="activeNav === 'browse'">
+              <KnowledgeSearch v-if="currentCourseId" :courseId="currentCourseId" @locate="onLocateNode" />
+              <div class="cat-selector" v-if="currentCourseId && categories.length">
+                <button :class="{ active: !selectedCategory }" @click="selectedCategory = ''; fetchGraph()">全部</button>
+                <button
+                  v-for="cat in categories"
+                  :key="cat"
+                  :class="{ active: selectedCategory === cat }"
+                  @click="selectedCategory = cat; fetchGraph()"
+                >
+                  {{ displayCategory(cat) }}
+                </button>
+              </div>
+              <div v-if="!currentCourseId" class="empty-state">请先选择课程</div>
+              <div class="node-list" v-else>
+                <div v-for="n in nodes" :key="n.id" class="node-card" @click="onSelectNode(n)">
+                  <div class="node-card-left" :style="{ borderLeftColor: getColor(n.category) }">
+                    <span class="node-card-name">{{ n.name }}</span>
+                    <span class="node-card-cat">{{ displayCategory(n.category) }}</span>
+                  </div>
+                  <span v-if="n.estimated_time" class="node-card-time">{{ n.estimated_time }} 分钟</span>
+                </div>
+              </div>
+            </div>
+
+            <ChatPanel
+              v-if="activeNav === 'qa'"
+              :courseId="currentCourseId"
+              :focusedNode="focusedNode"
+              @locate="onLocateNode"
+              @clear-focus="onClearFocus"
+            />
+
+            <PathRecommend
+              v-if="activeNav === 'path'"
+              ref="pathRecommendRef"
+              :studentId="user?.id || ''"
+              :targetNode="selectedNode"
+              :masteredIds="masteredIds"
+              @locate="onLocateNode"
+              @clear="onClearPath"
+              @path-found="onPathFound"
+            />
+
+            <ErrorBook v-if="activeNav === 'errors'" :studentId="user?.id" @locate-node="onLocateErrorNode" />
+
+            <TestPaper
+              v-if="activeNav === 'paper'"
+              :studentId="user?.id"
+              :courseId="currentCourseId"
+              @locate-node="onLocateErrorNode"
+            />
+
+            <ProfileCenter
+              v-if="activeNav === 'profile'"
+              :user="user"
+              :courseId="currentCourseId"
+              @updated="$emit('profile-updated', $event)"
+              @locate="onLocateNodeId"
+            />
+
+            <AdminDashboard v-if="activeNav === 'admin'" @locate="onLocateNodeId" />
+
+            <div v-if="activeNav === 'manage'" class="manage-grid">
+              <section class="manage-form">
+                <h3>知识点维护</h3>
+                <div class="form-row">
+                  <label>知识点名称</label>
+                  <input v-model="form.name" placeholder="例如：导数的概念" />
+                </div>
+                <div class="form-row">
+                  <label>分类</label>
+                  <input v-model="form.category" placeholder="例如：高等数学-导数" />
+                </div>
+                <div class="form-row two-cols">
+                  <div>
+                    <label>难度</label>
+                    <input v-model.number="form.difficulty" type="number" min="1" max="5" />
+                  </div>
+                  <div>
+                    <label>预计时长</label>
+                    <input v-model.number="form.estimated_time" type="number" min="0" placeholder="分钟" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <label>描述</label>
+                  <textarea v-model="form.description" rows="3" placeholder="补充知识点说明"></textarea>
+                </div>
+                <div class="form-actions">
+                  <button @click="onCreateNode" :disabled="!form.name">创建知识点</button>
+                  <button v-if="selectedNode" class="danger" @click="onDeleteNode">删除选中</button>
+                </div>
+              </section>
+
+              <section class="manage-form">
+                <h3>关系维护</h3>
+                <div class="form-row">
+                  <label>源知识点</label>
+                  <select v-model="relSource">
+                    <option value="">请选择</option>
+                    <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label>目标知识点</label>
+                  <select v-model="relTarget">
+                    <option value="">请选择</option>
+                    <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label>关系类型</label>
+                  <select v-model="relType">
+                    <option value="PREREQUISITE">前置知识</option>
+                    <option value="RELATED_TO">相关概念</option>
+                  </select>
+                </div>
+                <button @click="onCreateRelation" :disabled="!relSource || !relTarget">建立关系</button>
+              </section>
+            </div>
+          </div>
+        </section>
       </main>
 
-      <aside v-if="selectedNode" class="slide-panel">
+      <aside
+        v-if="selectedNode && !['profile', 'admin', 'manage'].includes(activeNav)"
+        class="slide-panel"
+      >
         <KnowledgePanel
           :node="selectedNode"
           :userId="user?.id || ''"
@@ -126,150 +282,11 @@
         />
       </aside>
     </div>
-
-    <div v-if="activeNav !== 'graph'" class="bottom-drawer">
-      <div class="drawer-handle" @click="activeNav = 'graph'">
-        <div>
-          <span class="drawer-title">{{ currentNavLabel }}</span>
-          <span class="drawer-subtitle">{{ currentNavHint }}</span>
-        </div>
-        <span class="drawer-close">收起</span>
-      </div>
-
-      <div class="drawer-body">
-        <div v-if="activeNav === 'browse'" class="drawer-scroll">
-          <KnowledgeSearch v-if="currentCourseId" :courseId="currentCourseId" @locate="onLocateNode" />
-          <div class="cat-selector" v-if="currentCourseId && categories.length">
-            <button :class="{ active: !selectedCategory }" @click="selectedCategory = ''; fetchGraph()">全部</button>
-            <button
-              v-for="cat in categories"
-              :key="cat"
-              :class="{ active: selectedCategory === cat }"
-              @click="selectedCategory = cat; fetchGraph()"
-            >
-              {{ displayCategory(cat) }}
-            </button>
-          </div>
-          <div v-if="!currentCourseId" class="empty-state">请先选择课程</div>
-          <div class="node-list" v-else>
-            <div v-for="n in nodes" :key="n.id" class="node-card" @click="onSelectNode(n)">
-              <div class="node-card-left" :style="{ borderLeftColor: getColor(n.category) }">
-                <span class="node-card-name">{{ n.name }}</span>
-                <span class="node-card-cat">{{ displayCategory(n.category) }}</span>
-              </div>
-              <span v-if="n.estimated_time" class="node-card-time">{{ n.estimated_time }} 分钟</span>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="activeNav === 'qa'" class="drawer-scroll drawer-chat">
-          <ChatPanel
-            :courseId="currentCourseId"
-            :focusedNode="focusedNode"
-            @locate="onLocateNode"
-            @clear-focus="onClearFocus"
-          />
-        </div>
-
-        <div v-if="activeNav === 'path'" class="drawer-scroll">
-          <PathRecommend
-            ref="pathRecommendRef"
-            :studentId="user?.id || ''"
-            :targetNode="selectedNode"
-            :masteredIds="masteredIds"
-            @locate="onLocateNode"
-            @clear="onClearPath"
-            @path-found="onPathFound"
-          />
-        </div>
-
-        <div v-if="activeNav === 'errors'" class="drawer-scroll">
-          <ErrorBook :studentId="user?.id" @locate-node="onLocateErrorNode" />
-        </div>
-
-        <div v-if="activeNav === 'paper'" class="drawer-scroll">
-          <TestPaper :studentId="user?.id" :courseId="currentCourseId" @locate-node="onLocateErrorNode" />
-        </div>
-
-        <div v-if="activeNav === 'profile'" class="drawer-scroll">
-          <ProfileCenter
-            :user="user"
-            :courseId="currentCourseId"
-            @updated="$emit('profile-updated', $event)"
-            @locate="onLocateNodeId"
-          />
-        </div>
-
-        <div v-if="activeNav === 'admin'" class="drawer-scroll">
-          <AdminDashboard @locate="onLocateNodeId" />
-        </div>
-
-        <div v-if="activeNav === 'manage'" class="drawer-scroll">
-          <div class="manage-grid">
-            <section class="manage-form">
-              <h3>知识点维护</h3>
-              <div class="form-row">
-                <label>知识点名称</label>
-                <input v-model="form.name" placeholder="例如：导数的概念" />
-              </div>
-              <div class="form-row">
-                <label>分类</label>
-                <input v-model="form.category" placeholder="例如：高等数学-导数" />
-              </div>
-              <div class="form-row two-cols">
-                <div>
-                  <label>难度</label>
-                  <input v-model.number="form.difficulty" type="number" min="1" max="5" />
-                </div>
-                <div>
-                  <label>预计时长</label>
-                  <input v-model.number="form.estimated_time" type="number" min="0" placeholder="分钟" />
-                </div>
-              </div>
-              <div class="form-row">
-                <label>描述</label>
-                <textarea v-model="form.description" rows="3" placeholder="补充知识点说明"></textarea>
-              </div>
-              <div class="form-actions">
-                <button @click="onCreateNode" :disabled="!form.name">创建知识点</button>
-                <button v-if="selectedNode" class="danger" @click="onDeleteNode">删除选中</button>
-              </div>
-            </section>
-
-            <section class="manage-form">
-              <h3>关系维护</h3>
-              <div class="form-row">
-                <label>源知识点</label>
-                <select v-model="relSource">
-                  <option value="">请选择</option>
-                  <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }}</option>
-                </select>
-              </div>
-              <div class="form-row">
-                <label>目标知识点</label>
-                <select v-model="relTarget">
-                  <option value="">请选择</option>
-                  <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }}</option>
-                </select>
-              </div>
-              <div class="form-row">
-                <label>关系类型</label>
-                <select v-model="relType">
-                  <option value="PREREQUISITE">前置知识</option>
-                  <option value="RELATED_TO">相关概念</option>
-                </select>
-              </div>
-              <button @click="onCreateRelation" :disabled="!relSource || !relTarget">建立关系</button>
-            </section>
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { knowledgeApi, graphApi, courseApi, analyticsApi, classroomApi } from '../api/index.js'
 import KnowledgeGraph from '../components/KnowledgeGraph.vue'
 import KnowledgeSearch from '../components/KnowledgeSearch.vue'
@@ -455,9 +472,11 @@ function onSelectNode(node) {
   searchNodeId.value = null
 }
 
-function onLocateNode(node) {
+async function onLocateNode(node) {
   selectedNode.value = node
   searchNodeId.value = node.id
+  activeNav.value = 'graph'
+  await nextTick()
   if (graphRef.value) graphRef.value.locateNode(node.id)
 }
 
@@ -474,8 +493,9 @@ function onPathFound(pathNodes) {
   highlightedPath.value = pathNodes.map(n => n.id)
 }
 
-function onShowRoadmap(targetId) {
+async function onShowRoadmap(targetId) {
   activeNav.value = 'path'
+  await nextTick()
   if (pathRecommendRef.value) pathRecommendRef.value.fetchPath(targetId)
 }
 
