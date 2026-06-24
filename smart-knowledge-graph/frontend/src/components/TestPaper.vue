@@ -1,20 +1,20 @@
 <template>
   <div class="test-paper">
     <div class="test-paper-actions">
-      <button @click="generate" :disabled="loading || !studentId">生成组卷</button>
+      <button @click="generate" :disabled="loading || !studentId">生成专项训练</button>
       <span v-if="generated" class="test-meta">
-        {{ exercises.length }} 题 | 知识点 {{ weakNodes.length }} 个
+        {{ exercises.length }} 题 · 覆盖 {{ weakNodes.length }} 个薄弱知识点
       </span>
     </div>
 
     <div v-if="loading" class="loading-spinner"></div>
 
     <div v-if="!loading && !generated" class="empty-state">
-      基于你的薄弱知识点和错题记录，自动生成专项训练卷
+      基于薄弱知识点与错题记录，自动生成专项训练卷。
     </div>
 
     <div v-if="generated && weakNodes.length" class="test-weak-nodes">
-      <div class="test-label">薄弱知识点：</div>
+      <div class="section-title">薄弱知识点</div>
       <span v-for="n in weakNodes" :key="n.id" class="weak-node-tag"
         @click="$emit('locate-node', n.id)">
         {{ n.name }}
@@ -22,7 +22,7 @@
     </div>
 
     <div v-if="generated && exercises.length" class="test-exercises">
-      <div class="test-label">专项练习题 ({{ exercises.length }} 题)：</div>
+      <div class="section-title">专项练习题 <span>{{ exercises.length }}</span></div>
       <div v-for="(ex, idx) in exercises" :key="idx" class="test-exercise-card">
         <div class="test-ex-num">{{ idx + 1 }}</div>
         <div class="test-ex-info">
@@ -35,7 +35,7 @@
     </div>
 
     <div v-if="generated && !exercises.length" class="empty-state">
-      当前薄弱知识点暂无绑定习题资源
+      当前薄弱知识点暂无绑定习题资源。
     </div>
   </div>
 </template>

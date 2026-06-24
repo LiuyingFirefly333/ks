@@ -2,6 +2,7 @@
 import hashlib
 import secrets
 import uuid
+import json
 from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 
 
@@ -436,16 +437,7 @@ class Neo4jClient:
             return [{"node": r["node"], "rel": r["rel"]} for r in result]
 
     def get_student_mastered_ids(self, student_id: str) -> list[str]:
-        with self.driver.session() as session:
-            result = session.run(
-                """
-                MATCH (s:Student {id: $student_id})-[r:HAS_MASTERED]->(n:KnowledgeNode)
-                WHERE r.score >= 75
-                RETURN n.id as id
-                """,
-                student_id=student_id,
-            )
-            return [r["id"] for r in result]
+        return [r["node_id"] for r in self.get_mastery_levels(student_id) if r["score"] >= 75]
 
     def delete_mastery(self, student_id: str, node_id: str) -> bool:
         with self.driver.session() as session:
@@ -558,13 +550,12 @@ class Neo4jClient:
         if not student_id:
             return graph_data
 
-        mastery_map = {}
-        mastered_data = self.get_student_mastery(student_id)
-        for m in mastered_data:
-            mastery_map[m["node"]["id"]] = m["rel"]["score"]
+        mastery_map = self.get_mastery_map(student_id, course_id)
 
         for node in graph_data["nodes"]:
-            node["mastery_score"] = mastery_map.get(node["id"], 0)
+            mastery = mastery_map.get(node["id"], {"score": 0, "level": "unlearned"})
+            node["mastery_score"] = mastery["score"]
+            node["mastery_level"] = mastery["level"]
 
         return graph_data
 
@@ -637,7 +628,7 @@ class Neo4jClient:
 
     @staticmethod
     def mastery_level(score: int) -> str:
-        """??????????"""
+        """Map a 0-100 mastery score to the four learning states."""
         if score >= 85:
             return "proficient"
         elif score >= 60:
@@ -647,15 +638,25 @@ class Neo4jClient:
         return "unlearned"
 
     def get_mastery_levels(self, student_id: str, course_id: str = None) -> list[dict]:
-        """?????????????????????"""
+        """Calculate composite mastery from manual score, errors, QA usage, and answer attempts."""
         with self.driver.session() as session:
             if course_id:
                 result = session.run(
                     """
                     MATCH (n:KnowledgeNode)-[:BELONGS_TO]->(:Course {id: $course_id})
                     OPTIONAL MATCH (s:Student {id: $student_id})-[r:HAS_MASTERED]->(n)
+                    OPTIONAL MATCH (s)-[:HAS_ERROR]->(e:ErrorRecord)-[:RELATES_TO]->(n)
+                    WITH s, n, r, count(DISTINCT e) as error_count
+                    OPTIONAL MATCH (s)-[:ANSWERED]->(a:PracticeAttempt)-[:RELATES_TO]->(n)
+                    WITH s, n, r, error_count, count(DISTINCT a) as attempt_count,
+                         sum(CASE WHEN a.correct = true THEN 1 ELSE 0 END) as correct_count
+                    OPTIONAL MATCH (qs:QASession {user_id: $student_id})-[:HAS_MESSAGE]->(m:QAMessage)
+                    WHERE coalesce(m.sources_json, '') CONTAINS n.id
                     RETURN n.id as node_id, n.name as name, n.category as category,
-                           n.difficulty as difficulty, coalesce(r.score, 0) as score
+                           n.difficulty as difficulty, n.estimated_time as estimated_time,
+                           coalesce(r.score, 0) as manual_score,
+                           error_count, attempt_count, correct_count,
+                           count(DISTINCT m) as qa_count
                     ORDER BY n.name
                     """,
                     student_id=student_id, course_id=course_id,
@@ -665,24 +666,92 @@ class Neo4jClient:
                     """
                     MATCH (n:KnowledgeNode)
                     OPTIONAL MATCH (s:Student {id: $student_id})-[r:HAS_MASTERED]->(n)
+                    OPTIONAL MATCH (s)-[:HAS_ERROR]->(e:ErrorRecord)-[:RELATES_TO]->(n)
+                    WITH s, n, r, count(DISTINCT e) as error_count
+                    OPTIONAL MATCH (s)-[:ANSWERED]->(a:PracticeAttempt)-[:RELATES_TO]->(n)
+                    WITH s, n, r, error_count, count(DISTINCT a) as attempt_count,
+                         sum(CASE WHEN a.correct = true THEN 1 ELSE 0 END) as correct_count
+                    OPTIONAL MATCH (qs:QASession {user_id: $student_id})-[:HAS_MESSAGE]->(m:QAMessage)
+                    WHERE coalesce(m.sources_json, '') CONTAINS n.id
                     RETURN n.id as node_id, n.name as name, n.category as category,
-                           n.difficulty as difficulty, coalesce(r.score, 0) as score
+                           n.difficulty as difficulty, n.estimated_time as estimated_time,
+                           coalesce(r.score, 0) as manual_score,
+                           error_count, attempt_count, correct_count,
+                           count(DISTINCT m) as qa_count
                     ORDER BY n.name
                     """,
                     student_id=student_id,
                 )
             records = []
             for r in result:
-                score = r["score"]
+                manual_score = int(r["manual_score"] or 0)
+                error_count = int(r["error_count"] or 0)
+                qa_count = int(r["qa_count"] or 0)
+                attempt_count = int(r["attempt_count"] or 0)
+                correct_count = int(r["correct_count"] or 0)
+                correct_rate = round(correct_count / attempt_count, 2) if attempt_count else None
+
+                if manual_score == 0 and error_count == 0 and qa_count == 0 and attempt_count == 0:
+                    score = 0
+                else:
+                    score = manual_score
+                    if attempt_count:
+                        score = round(score * 0.55 + (correct_rate or 0) * 100 * 0.35 + 10)
+                    score += min(qa_count * 3, 12)
+                    score -= min(error_count * 12, 42)
+                    score = max(0, min(100, int(score)))
+
                 records.append({
                     "node_id": r["node_id"],
                     "name": r["name"],
                     "category": r["category"],
                     "difficulty": r["difficulty"],
+                    "estimated_time": r["estimated_time"] or 0,
                     "score": score,
                     "level": self.mastery_level(score),
+                    "manual_score": manual_score,
+                    "error_count": error_count,
+                    "qa_count": qa_count,
+                    "attempt_count": attempt_count,
+                    "correct_rate": correct_rate,
+                    "evidence": {
+                        "manual_score": manual_score,
+                        "error_count": error_count,
+                        "qa_count": qa_count,
+                        "attempt_count": attempt_count,
+                        "correct_rate": correct_rate,
+                    },
                 })
             return records
+
+    def get_mastery_map(self, student_id: str, course_id: str = None) -> dict:
+        return {r["node_id"]: r for r in self.get_mastery_levels(student_id, course_id)}
+
+    def get_prerequisite_mastery(self, student_id: str, target_id: str) -> list[dict]:
+        mastery = self.get_mastery_map(student_id)
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (target:KnowledgeNode {id: $target_id})
+                OPTIONAL MATCH path = (pre:KnowledgeNode)-[:PREREQUISITE*]->(target)
+                RETURN DISTINCT pre { .* } as node
+                """,
+                target_id=target_id,
+            )
+            prereqs = []
+            for r in result:
+                node = r["node"]
+                if not node or not node.get("id") or node["id"] == target_id:
+                    continue
+                m = mastery.get(node["id"], {"score": 0, "level": "unlearned"})
+                prereqs.append({**node, "mastery_score": m["score"], "mastery_level": m["level"]})
+            return prereqs
+
+    def get_weak_prerequisites(self, student_id: str, target_id: str) -> list[dict]:
+        return [
+            n for n in self.get_prerequisite_mastery(student_id, target_id)
+            if n.get("mastery_level") in ("weak", "unlearned")
+        ]
 
     # ---- ?????? ----
 
@@ -955,6 +1024,17 @@ class Neo4jClient:
                 "prerequisites": [p for p in rec["prerequisites"] if p.get("id") and p["id"] != rec["node"]["id"]],
             }
 
+    def get_error_owner(self, error_id: str) -> str | None:
+        with self.driver.session() as session:
+            rec = session.run(
+                """
+                MATCH (s:Student)-[:HAS_ERROR]->(e:ErrorRecord {id: $id})
+                RETURN s.id as student_id
+                """,
+                id=error_id,
+            ).single()
+            return rec["student_id"] if rec else None
+
     # ---- ???? ----
 
     def generate_test_paper(self, student_id: str, course_id: str = None, count: int = 10) -> dict:
@@ -1020,8 +1100,526 @@ class Neo4jClient:
 
     def get_admin_by_token(self, token: str) -> dict | None:
         with self.driver.session() as session:
-            r = session.run("MATCH (a:Admin {token: $token}) RETURN a { .id, .name, .email } as admin", token=token).single()
+            r = session.run("MATCH (a:Admin {token: $token}) RETURN a { .id, .name, .email, .avatar_url, .nickname, .bio, created_at: toString(a.created_at) } as admin", token=token).single()
             return r["admin"] if r else None
+
+    def get_user_by_token(self, token: str) -> dict | None:
+        """Return the authenticated user and role for a bearer token."""
+        if not token:
+            return None
+        student = self.get_student_by_token(token)
+        if student:
+            return {"role": "student", "user": student}
+        teacher = self.get_teacher_by_token(token)
+        if teacher:
+            return {"role": "teacher", "user": teacher}
+        admin = self.get_admin_by_token(token)
+        if admin:
+            return {"role": "admin", "user": admin}
+        return None
+
+    def get_user_profile(self, role: str, user_id: str) -> dict | None:
+        label = {"student": "Student", "teacher": "Teacher", "admin": "Admin"}.get(role)
+        if not label:
+            return None
+        with self.driver.session() as session:
+            result = session.run(
+                f"""
+                MATCH (u:{label} {{id: $id}})
+                RETURN u {{
+                    .id, .name, .email, .nickname, .avatar_url, .bio,
+                    created_at: CASE WHEN u.created_at IS NULL THEN NULL ELSE toString(u.created_at) END,
+                    updated_at: CASE WHEN u.updated_at IS NULL THEN NULL ELSE toString(u.updated_at) END
+                }} as user
+                """,
+                id=user_id,
+            )
+            record = result.single()
+            return record["user"] if record else None
+
+    def update_user_profile(self, role: str, user_id: str, updates: dict) -> dict | None:
+        label = {"student": "Student", "teacher": "Teacher", "admin": "Admin"}.get(role)
+        allowed = {"name", "nickname", "avatar_url", "bio"}
+        clean = {k: v for k, v in updates.items() if k in allowed}
+        if not label or not clean:
+            return self.get_user_profile(role, user_id)
+        sets = ", ".join(f"u.{key} = ${key}" for key in clean)
+        with self.driver.session() as session:
+            result = session.run(
+                f"""
+                MATCH (u:{label} {{id: $id}})
+                SET {sets}, u.updated_at = datetime()
+                RETURN u {{
+                    .id, .name, .email, .nickname, .avatar_url, .bio,
+                    created_at: CASE WHEN u.created_at IS NULL THEN NULL ELSE toString(u.created_at) END,
+                    updated_at: CASE WHEN u.updated_at IS NULL THEN NULL ELSE toString(u.updated_at) END
+                }} as user
+                """,
+                id=user_id,
+                **clean,
+            )
+            record = result.single()
+            return record["user"] if record else None
+
+    def get_personal_stats(self, role: str, user_id: str, course_id: str = None) -> dict:
+        if role == "student":
+            mastery = self.get_mastery_levels(user_id, course_id)
+            total_nodes = len(mastery)
+            summary = {"proficient": 0, "fair": 0, "weak": 0, "unlearned": 0}
+            for row in mastery:
+                summary[row["level"]] += 1
+            learned_count = summary["proficient"] + summary["fair"] + summary["weak"]
+            average_score = round(sum(row["score"] for row in mastery) / max(total_nodes, 1), 1)
+            weak_nodes = sorted(
+                [row for row in mastery if row["level"] == "weak"],
+                key=lambda row: row["score"],
+            )[:6]
+            recent_nodes = sorted(
+                [row for row in mastery if row["score"] > 0],
+                key=lambda row: row["score"],
+                reverse=True,
+            )[:6]
+            with self.driver.session() as session:
+                qa = session.run(
+                    """
+                    MATCH (s:QASession {user_id: $uid, role: 'student'})
+                    OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:QAMessage)
+                    RETURN count(DISTINCT s) as sessions,
+                           count(DISTINCT CASE WHEN m.role = 'user' THEN m END) as questions
+                    """,
+                    uid=user_id,
+                ).single()
+                errors = session.run(
+                    """
+                    MATCH (:Student {id: $uid})-[:HAS_ERROR]->(e:ErrorRecord)
+                    RETURN count(e) as total,
+                           count(CASE WHEN date(e.created_at) >= date() - duration({days: 7}) THEN 1 END) as recent
+                    """,
+                    uid=user_id,
+                ).single()
+            return {
+                "role": role,
+                "overview": {
+                    "total_nodes": total_nodes,
+                    "learned_count": learned_count,
+                    "completion_rate": round(learned_count / max(total_nodes, 1), 2),
+                    "average_score": average_score,
+                    "weak_count": summary["weak"] + summary["unlearned"],
+                    "qa_sessions": qa["sessions"] if qa else 0,
+                    "qa_questions": qa["questions"] if qa else 0,
+                    "error_count": errors["total"] if errors else 0,
+                    "recent_error_count": errors["recent"] if errors else 0,
+                },
+                "mastery_summary": summary,
+                "weak_nodes": weak_nodes,
+                "recent_mastery": recent_nodes,
+            }
+
+        if role == "teacher":
+            with self.driver.session() as session:
+                stats = session.run(
+                    """
+                    MATCH (t:Teacher {id: $uid})
+                    OPTIONAL MATCH (t)-[:OWNS]->(c:Course)
+                    OPTIONAL MATCH (t)-[:TEACHES]->(cls:Class)
+                    OPTIONAL MATCH (cls)<-[:BELONGS_TO]-(s:Student)
+                    RETURN count(DISTINCT c) as courses,
+                           count(DISTINCT cls) as classes,
+                           count(DISTINCT s) as students
+                    """,
+                    uid=user_id,
+                ).single()
+            return {
+                "role": role,
+                "overview": {
+                    "course_count": stats["courses"] if stats else 0,
+                    "class_count": stats["classes"] if stats else 0,
+                    "student_count": stats["students"] if stats else 0,
+                },
+                "mastery_summary": {},
+                "weak_nodes": [],
+                "recent_mastery": [],
+            }
+
+        with self.driver.session() as session:
+            stats = session.run(
+                """
+                MATCH (n:KnowledgeNode)
+                WITH count(n) as nodes
+                MATCH (s:Student)
+                WITH nodes, count(s) as students
+                MATCH (t:Teacher)
+                WITH nodes, students, count(t) as teachers
+                MATCH (c:Course)
+                RETURN nodes, students, teachers, count(c) as courses
+                """
+            ).single()
+        return {
+            "role": role,
+            "overview": {
+                "total_nodes": stats["nodes"] if stats else 0,
+                "student_count": stats["students"] if stats else 0,
+                "teacher_count": stats["teachers"] if stats else 0,
+                "course_count": stats["courses"] if stats else 0,
+            },
+            "mastery_summary": {},
+            "weak_nodes": [],
+            "recent_mastery": [],
+        }
+
+    def teacher_owns_class(self, teacher_id: str, class_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (t:Teacher {id: $teacher_id})-[:TEACHES]->(c:Class {id: $class_id})
+                RETURN count(c) as ok
+                """,
+                teacher_id=teacher_id, class_id=class_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def teacher_owns_course(self, teacher_id: str, course_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (t:Teacher {id: $teacher_id})-[:OWNS]->(c:Course {id: $course_id})
+                RETURN count(c) as ok
+                """,
+                teacher_id=teacher_id, course_id=course_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def student_in_class(self, student_id: str, class_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (s:Student {id: $student_id})-[:BELONGS_TO]->(c:Class {id: $class_id})
+                RETURN count(c) as ok
+                """,
+                student_id=student_id, class_id=class_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def teacher_can_access_student(self, teacher_id: str, student_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (t:Teacher {id: $teacher_id})-[:TEACHES]->(c:Class)<-[:BELONGS_TO]-(s:Student {id: $student_id})
+                RETURN count(s) as ok
+                """,
+                teacher_id=teacher_id, student_id=student_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def can_teacher_edit_node(self, teacher_id: str, node_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (t:Teacher {id: $teacher_id})-[:OWNS]->(c:Course)<-[:BELONGS_TO]-(n:KnowledgeNode {id: $node_id})
+                RETURN count(n) as ok
+                """,
+                teacher_id=teacher_id, node_id=node_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def get_comment_owner(self, comment_id: str) -> str | None:
+        with self.driver.session() as session:
+            r = session.run(
+                "MATCH (c:Comment {id: $id}) RETURN c.user_id as user_id",
+                id=comment_id,
+            ).single()
+            return r["user_id"] if r else None
+
+    def create_audit_log(self, actor_id: str | None, actor_role: str, action: str,
+                         target_type: str = "", target_id: str = "", detail: dict | None = None) -> dict:
+        with self.driver.session() as session:
+            log_id = str(uuid.uuid4())
+            detail_json = json.dumps(detail or {}, ensure_ascii=False)
+            r = session.run(
+                """
+                CREATE (l:AuditLog {
+                    id: $id,
+                    actor_id: $actor_id,
+                    actor_role: $actor_role,
+                    action: $action,
+                    target_type: $target_type,
+                    target_id: $target_id,
+                    detail_json: $detail_json,
+                    created_at: datetime()
+                })
+                RETURN l { .id, .actor_id, .actor_role, .action, .target_type, .target_id,
+                           .detail_json, created_at: toString(l.created_at) } as log
+                """,
+                id=log_id,
+                actor_id=actor_id,
+                actor_role=actor_role,
+                action=action,
+                target_type=target_type,
+                target_id=target_id,
+                detail_json=detail_json,
+            ).single()
+            return r["log"]
+
+    # ---- AI Q&A persistence ----
+
+    def create_qa_session(self, user_id: str, role: str, title: str = "新会话", course_id: str | None = None,
+                          focus_node_id: str | None = None) -> dict:
+        with self.driver.session() as session:
+            sid = str(uuid.uuid4())
+            r = session.run(
+                """
+                CREATE (s:QASession {
+                    id: $id,
+                    user_id: $user_id,
+                    role: $role,
+                    title: $title,
+                    course_id: $course_id,
+                    focus_node_id: $focus_node_id,
+                    created_at: datetime(),
+                    updated_at: datetime()
+                })
+                RETURN s { .id, .user_id, .role, .title, .course_id, .focus_node_id,
+                           created_at: toString(s.created_at), updated_at: toString(s.updated_at) } as session
+                """,
+                id=sid,
+                user_id=user_id,
+                role=role,
+                title=title,
+                course_id=course_id,
+                focus_node_id=focus_node_id,
+            ).single()
+            return r["session"]
+
+    def get_qa_session(self, session_id: str) -> dict | None:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (s:QASession {id: $id})
+                RETURN s { .id, .user_id, .role, .title, .course_id, .focus_node_id,
+                           created_at: toString(s.created_at), updated_at: toString(s.updated_at) } as session
+                """,
+                id=session_id,
+            ).single()
+            return r["session"] if r else None
+
+    def list_qa_sessions(self, user_id: str, role: str, q: str | None = None) -> list[dict]:
+        with self.driver.session() as session:
+            if q:
+                result = session.run(
+                    """
+                    MATCH (s:QASession {user_id: $user_id, role: $role})
+                    OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:QAMessage)
+                    WITH s, collect(m.content) as contents
+                    WHERE s.title CONTAINS $q OR any(c in contents WHERE c CONTAINS $q)
+                    RETURN s { .id, .user_id, .role, .title, .course_id, .focus_node_id,
+                               created_at: toString(s.created_at), updated_at: toString(s.updated_at) } as session
+                    ORDER BY session.updated_at DESC
+                    """,
+                    user_id=user_id,
+                    role=role,
+                    q=q,
+                )
+            else:
+                result = session.run(
+                    """
+                    MATCH (s:QASession {user_id: $user_id, role: $role})
+                    RETURN s { .id, .user_id, .role, .title, .course_id, .focus_node_id,
+                               created_at: toString(s.created_at), updated_at: toString(s.updated_at) } as session
+                    ORDER BY session.updated_at DESC
+                    """,
+                    user_id=user_id,
+                    role=role,
+                )
+            return [r["session"] for r in result]
+
+    def delete_qa_session(self, session_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (s:QASession {id: $id})
+                OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:QAMessage)
+                DETACH DELETE m, s
+                RETURN count(s) as ok
+                """,
+                id=session_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def add_qa_message(self, session_id: str, user_id: str, role: str, content: str,
+                       sources: list[dict] | None = None, question_id: str | None = None) -> dict:
+        with self.driver.session() as session:
+            mid = str(uuid.uuid4())
+            sources_json = json.dumps(sources or [], ensure_ascii=False)
+            r = session.run(
+                """
+                MATCH (s:QASession {id: $session_id})
+                CREATE (m:QAMessage {
+                    id: $id,
+                    user_id: $user_id,
+                    role: $role,
+                    content: $content,
+                    sources_json: $sources_json,
+                    question_id: $question_id,
+                    created_at: datetime()
+                })
+                CREATE (s)-[:HAS_MESSAGE]->(m)
+                SET s.updated_at = datetime(),
+                    s.title = CASE WHEN s.title = '新会话' AND $role = 'user'
+                                   THEN left($content, 28) ELSE s.title END
+                RETURN m { .id, .user_id, .role, .content, .sources_json, .question_id,
+                           created_at: toString(m.created_at) } as message
+                """,
+                session_id=session_id,
+                id=mid,
+                user_id=user_id,
+                role=role,
+                content=content,
+                sources_json=sources_json,
+                question_id=question_id,
+            ).single()
+            msg = r["message"]
+            msg["sources"] = json.loads(msg.pop("sources_json") or "[]")
+            return msg
+
+    def list_qa_messages(self, session_id: str, q: str | None = None) -> list[dict]:
+        with self.driver.session() as session:
+            if q:
+                result = session.run(
+                    """
+                    MATCH (:QASession {id: $session_id})-[:HAS_MESSAGE]->(m:QAMessage)
+                    WHERE m.content CONTAINS $q
+                    RETURN m { .id, .user_id, .role, .content, .sources_json, .question_id,
+                               created_at: toString(m.created_at) } as message
+                    ORDER BY message.created_at ASC
+                    """,
+                    session_id=session_id,
+                    q=q,
+                )
+            else:
+                result = session.run(
+                    """
+                    MATCH (:QASession {id: $session_id})-[:HAS_MESSAGE]->(m:QAMessage)
+                    RETURN m { .id, .user_id, .role, .content, .sources_json, .question_id,
+                               created_at: toString(m.created_at) } as message
+                    ORDER BY message.created_at ASC
+                    """,
+                    session_id=session_id,
+                )
+            messages = []
+            for r in result:
+                msg = r["message"]
+                msg["sources"] = json.loads(msg.pop("sources_json") or "[]")
+                messages.append(msg)
+            return messages
+
+    def search_qa_history(self, user_id: str, role: str, q: str) -> list[dict]:
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (s:QASession {user_id: $user_id, role: $role})-[:HAS_MESSAGE]->(m:QAMessage)
+                WHERE m.content CONTAINS $q OR s.title CONTAINS $q
+                RETURN s { .id, .title, .course_id, .focus_node_id,
+                           updated_at: toString(s.updated_at) } as session,
+                       m { .id, .role, .content, .sources_json,
+                           created_at: toString(m.created_at) } as message
+                ORDER BY message.created_at DESC
+                LIMIT 50
+                """,
+                user_id=user_id,
+                role=role,
+                q=q,
+            )
+            rows = []
+            for r in result:
+                msg = r["message"]
+                msg["sources"] = json.loads(msg.pop("sources_json") or "[]")
+                rows.append({"session": r["session"], "message": msg})
+            return rows
+
+    def create_qa_feedback(self, user_id: str, role: str, session_id: str, message_id: str,
+                           correction: str, correct_description: str = "",
+                           target_type: str = "node", target_id: str = "") -> dict:
+        with self.driver.session() as session:
+            fid = str(uuid.uuid4())
+            r = session.run(
+                """
+                MATCH (s:QASession {id: $session_id})
+                OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:QAMessage {id: $message_id})
+                CREATE (f:QAFeedback {
+                    id: $id,
+                    user_id: $user_id,
+                    role: $role,
+                    session_id: $session_id,
+                    message_id: $message_id,
+                    correction: $correction,
+                    correct_description: $correct_description,
+                    target_type: $target_type,
+                    target_id: $target_id,
+                    status: 'pending',
+                    created_at: datetime()
+                })
+                CREATE (f)-[:ON_SESSION]->(s)
+                FOREACH (_ IN CASE WHEN m IS NULL THEN [] ELSE [1] END | CREATE (f)-[:ON_MESSAGE]->(m))
+                RETURN f { .id, .user_id, .role, .session_id, .message_id, .correction,
+                           .correct_description, .target_type, .target_id, .status,
+                           created_at: toString(f.created_at) } as feedback
+                """,
+                id=fid,
+                user_id=user_id,
+                role=role,
+                session_id=session_id,
+                message_id=message_id,
+                correction=correction,
+                correct_description=correct_description,
+                target_type=target_type,
+                target_id=target_id,
+            ).single()
+            return r["feedback"]
+
+    def list_qa_feedback(self, status: str | None = None) -> list[dict]:
+        with self.driver.session() as session:
+            if status:
+                result = session.run(
+                    """
+                    MATCH (f:QAFeedback {status: $status})
+                    RETURN f { .*,
+                               created_at: toString(f.created_at),
+                               reviewed_at: CASE WHEN f.reviewed_at IS NULL THEN NULL ELSE toString(f.reviewed_at) END } as feedback
+                    ORDER BY feedback.created_at DESC
+                    """,
+                    status=status,
+                )
+            else:
+                result = session.run(
+                    """
+                    MATCH (f:QAFeedback)
+                    RETURN f { .*,
+                               created_at: toString(f.created_at),
+                               reviewed_at: CASE WHEN f.reviewed_at IS NULL THEN NULL ELSE toString(f.reviewed_at) END } as feedback
+                    ORDER BY feedback.created_at DESC
+                    """
+                )
+            return [r["feedback"] for r in result]
+
+    def review_qa_feedback(self, feedback_id: str, reviewer_id: str, status: str, note: str = "") -> dict | None:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (f:QAFeedback {id: $id})
+                SET f.status = $status,
+                    f.review_note = $note,
+                    f.reviewer_id = $reviewer_id,
+                    f.reviewed_at = datetime()
+                RETURN f { .*,
+                           created_at: toString(f.created_at),
+                           reviewed_at: toString(f.reviewed_at) } as feedback
+                """,
+                id=feedback_id,
+                status=status,
+                note=note,
+                reviewer_id=reviewer_id,
+            ).single()
+            return r["feedback"] if r else None
 
     def list_all_users(self) -> dict:
         with self.driver.session() as session:

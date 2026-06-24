@@ -1,23 +1,22 @@
 <template>
   <div class="error-book">
-    <div class="error-book-actions">
-      <button @click="fetchErrors" :disabled="loading">刷新</button>
+    <div class="panel-actions">
+      <button class="secondary" @click="fetchErrors" :disabled="loading">刷新错题</button>
     </div>
 
     <div v-if="loading" class="loading-spinner"></div>
 
     <div v-if="!loading && errors.length === 0" class="empty-state">
-      暂无错题记录
+      暂无错题记录。完成练习后，错题会在这里自动沉淀。
     </div>
 
-    <!-- 错题列表 -->
     <div v-for="err in errors" :key="err.id" class="error-card">
       <div class="error-card-header">
         <span class="error-node-badge" @click="$emit('locate-node', err.node_id)">
           {{ err.node_name }}
         </span>
         <span class="error-date">{{ fmtDate(err.created_at) }}</span>
-        <button class="error-del" @click="onDelete(err.id)">&times;</button>
+        <button class="icon-button subtle" @click="onDelete(err.id)" title="删除">×</button>
       </div>
       <div class="error-question">{{ err.question }}</div>
       <div class="error-answers">
@@ -25,18 +24,19 @@
         <div class="error-ans correct">正确答案：{{ err.correct_answer }}</div>
       </div>
       <div v-if="err.error_reason" class="error-reason">{{ err.error_reason }}</div>
-      <button class="error-trace-btn" @click="onTrace(err)">溯 源</button>
+      <button class="error-trace-btn" @click="onTrace(err)">
+        {{ traceErrorId === err.id ? '收起溯源' : '知识点溯源' }}
+      </button>
 
-      <!-- 溯源展开 -->
       <div v-if="traceErrorId === err.id" class="error-trace">
         <div v-if="traceLoading" class="loading-spinner"></div>
         <div v-else-if="traceData">
           <div class="trace-node">
             <strong>错题考点：{{ traceData.node.name }}</strong>
-            <p>{{ traceData.node.description }}</p>
+            <p>{{ traceData.node.description || '暂无考点说明' }}</p>
           </div>
           <div v-if="traceData.prerequisites.length" class="trace-prereqs">
-            <div class="trace-label">前置知识点链 ({{ traceData.prerequisites.length }})：</div>
+            <div class="trace-label">前置知识链 {{ traceData.prerequisites.length }} 个</div>
             <div v-for="p in traceData.prerequisites" :key="p.id" class="trace-item"
               @click="$emit('locate-node', p.id)">
               {{ p.name }}

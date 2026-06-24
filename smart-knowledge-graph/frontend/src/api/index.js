@@ -14,13 +14,26 @@ api.interceptors.request.use(config => {
   return config
 })
 
+api.interceptors.response.use(
+  response => response,
+  error => {
+    const payload = error.response?.data
+    if (payload?.error && typeof payload.error === 'object') {
+      error.normalizedMessage = payload.error.message
+    } else if (typeof payload?.error === 'string') {
+      error.normalizedMessage = payload.error
+    }
+    return Promise.reject(error)
+  }
+)
+
 // Auth
 export const authApi = {
   register: (name, email, password) =>
     api.post('/auth/register', { name, email, password }).then(r => r.data),
   login: (email, password) =>
     api.post('/auth/login', { email, password }).then(r => r.data),
-  me: (role = 'student') => api.get('/auth/me', { params: { role } }).then(r => r.data),
+  me: () => api.get('/auth/me').then(r => r.data),
   registerTeacher: (name, email, password) =>
     api.post('/auth/teacher/register', { name, email, password }).then(r => r.data),
   loginTeacher: (email, password) =>
@@ -72,8 +85,8 @@ export const recommendApi = {
     api.post('/recommend/path/thorough', { student_id: studentId, target }).then(r => r.data),
   getPrerequisites: (nodeId) =>
     api.get('/recommend/prerequisites/' + nodeId).then(r => r.data),
-  getRoadmap: (targetId) =>
-    api.get('/recommend/roadmap/' + targetId).then(r => r.data),
+  getRoadmap: (targetId, studentId) =>
+    api.get('/recommend/roadmap/' + targetId, { params: { student_id: studentId } }).then(r => r.data),
   setMastery: (studentId, nodeId, score) =>
     api.post('/recommend/mastery', { student_id: studentId, node_id: nodeId, score }).then(r => r.data),
   getMastery: (studentId) =>
@@ -84,6 +97,16 @@ export const recommendApi = {
 
 // AI Q&A
 export const qaApi = {
+  createSession: (title, courseId, nodeId) =>
+    api.post('/qa/sessions', { title, course_id: courseId, node_id: nodeId }).then(r => r.data),
+  listSessions: (q) =>
+    api.get('/qa/sessions', { params: { q } }).then(r => r.data),
+  getSession: (sessionId) =>
+    api.get('/qa/sessions/' + sessionId).then(r => r.data),
+  deleteSession: (sessionId) =>
+    api.delete('/qa/sessions/' + sessionId).then(r => r.data),
+  searchHistory: (q) =>
+    api.get('/qa/history/search', { params: { q } }).then(r => r.data),
   ask: (question, courseId, nodeId, sessionId) =>
     api.post('/qa/ask', { question, course_id: courseId, node_id: nodeId, session_id: sessionId }).then(r => r.data),
   askStream: (question, courseId, nodeId, sessionId, onToken, onSources, onDone, onError) => {
@@ -111,7 +134,7 @@ export const qaApi = {
               const event = JSON.parse(line.slice(6))
               if (event.type === 'token') onToken(event.data)
               else if (event.type === 'sources') onSources(event.data, event.session_id)
-              else if (event.type === 'done') onDone()
+              else if (event.type === 'done') onDone(event.message_id)
               else if (event.type === 'error') onError(event.data)
             } catch {}
           }
@@ -119,6 +142,10 @@ export const qaApi = {
       }
     }).catch(onError)
   },
+  submitFeedback: (payload) => api.post('/qa/feedback', payload).then(r => r.data),
+  listFeedback: (status) => api.get('/qa/feedback', { params: { status } }).then(r => r.data),
+  reviewFeedback: (id, status, note) =>
+    api.post('/qa/feedback/' + id + '/review', { status, note }).then(r => r.data),
 }
 
 // Analytics
@@ -127,6 +154,13 @@ export const analyticsApi = {
     api.post('/analytics/mastery/calc', { student_id: studentId, course_id: courseId }).then(r => r.data),
   classHeatmap: (classId, courseId) =>
     api.post('/analytics/class/heatmap', { class_id: classId, course_id: courseId }).then(r => r.data),
+}
+
+// Profile
+export const profileApi = {
+  get: () => api.get('/profile').then(r => r.data),
+  update: (payload) => api.put('/profile', payload).then(r => r.data),
+  stats: (courseId) => api.get('/profile/stats', { params: { course_id: courseId } }).then(r => r.data),
 }
 
 // Classroom

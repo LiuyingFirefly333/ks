@@ -1,6 +1,6 @@
 <template>
   <LoginView v-if="!user" @login-success="onLoginSuccess" />
-  <DashboardView v-else :user="user" @logout="onLogout" />
+  <DashboardView v-else :user="user" @logout="onLogout" @profile-updated="onProfileUpdated" />
 </template>
 
 <script setup>
@@ -20,6 +20,12 @@ function onLogout() {
   localStorage.removeItem('user')
   localStorage.removeItem('role')
   user.value = null
+}
+
+function onProfileUpdated(updatedUser) {
+  user.value = { ...(user.value || {}), ...updatedUser }
+  localStorage.setItem('user', JSON.stringify(user.value))
+  if (updatedUser.role) localStorage.setItem('role', updatedUser.role)
 }
 
 onMounted(async () => {

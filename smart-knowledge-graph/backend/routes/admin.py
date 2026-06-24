@@ -1,51 +1,35 @@
 from flask import Blueprint, request, jsonify
 from models.neo4j_client import db
+from routes.security import audit, legacy_fail, require_roles
 
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
 
-@bp.route("/register", methods=["POST"])
-def register():
-    data = request.json
-    if not data or not all(k in data for k in ("name", "email", "password")):
-        return jsonify({"error": "name, email, password 不能为空"}), 400
-    admin = db.create_admin(data["name"], data["email"], data["password"])
-    if admin is None:
-        return jsonify({"error": "该邮箱已被注册"}), 409
-    return jsonify({"admin": admin}), 201
-
-
-@bp.route("/login", methods=["POST"])
-def login():
-    data = request.json
-    if not data or not data.get("email") or not data.get("password"):
-        return jsonify({"error": "email 和 password 不能为空"}), 400
-    admin = db.login_admin(data["email"], data["password"])
-    if admin is None:
-        return jsonify({"error": "邮箱或密码错误"}), 401
-    return jsonify({"admin": admin})
-
-
 @bp.route("/users", methods=["GET"])
+@require_roles("admin")
 def list_users():
     return jsonify(db.list_all_users())
 
 
 @bp.route("/users/<user_type>/<user_id>/disable", methods=["POST"])
+@require_roles("admin")
 def disable_user(user_type, user_id):
     if user_type not in ("student", "teacher"):
-        return jsonify({"error": "类型无效"}), 400
+        return legacy_fail("用户类型无效", 400, "VALIDATION_ERROR")
     if db.disable_user(user_type, user_id):
-        return jsonify({"message": "已禁用"})
-    return jsonify({"error": "用户不存在"}), 404
+        audit("user.disable", user_type, user_id)
+        return jsonify({"message": "已禁用", "success": True})
+    return legacy_fail("用户不存在", 404, "USER_NOT_FOUND")
 
 
 @bp.route("/graph/validate", methods=["GET"])
+@require_roles("admin")
 def validate_graph():
     return jsonify(db.detect_conflicts())
 
 
 @bp.route("/dashboard", methods=["GET"])
+@require_roles("admin")
 def dashboard():
     course_id = request.args.get("course_id")
     return jsonify(db.get_dashboard_stats(course_id or None))
