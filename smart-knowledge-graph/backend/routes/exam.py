@@ -1,8 +1,72 @@
 from flask import Blueprint, request, jsonify
 from models.neo4j_client import db
-from routes.security import assert_self_or_roles, audit, legacy_fail, require_roles
+from routes.security import assert_self_or_roles, audit, current_user_id, legacy_fail, require_roles
 
 bp = Blueprint("exam", __name__, url_prefix="/api/exam")
+
+QUESTION_TYPES = {"single_choice", "multiple_choice", "true_false", "blank", "subjective"}
+
+
+def _question_payload(data):
+    qtype = data.get("type", "single_choice")
+    if qtype not in QUESTION_TYPES:
+        raise ValueError("不支持的题型")
+    return {
+        "type": qtype,
+        "stem": data.get("stem", "").strip(),
+        "options": data.get("options") or [],
+        "answer": data.get("answer", ""),
+        "analysis": data.get("analysis", "").strip(),
+        "difficulty": int(data.get("difficulty", 1) or 1),
+        "score": int(data.get("score", 5) or 5),
+        "status": data.get("status", "published"),
+        "variant_of": data.get("variant_of", ""),
+        "node_ids": data.get("node_ids") or [],
+        "created_by": current_user_id() or "",
+    }
+
+
+@bp.route("/questions", methods=["GET"])
+@require_roles("student", "teacher", "admin")
+def list_questions():
+    difficulty = request.args.get("difficulty")
+    questions = db.list_questions(
+        course_id=request.args.get("course_id"),
+        node_id=request.args.get("node_id"),
+        question_type=request.args.get("type"),
+        difficulty=int(difficulty) if difficulty else None,
+        status=request.args.get("status", "published"),
+        limit=int(request.args.get("limit", 100)),
+    )
+    return jsonify(questions)
+
+
+@bp.route("/questions", methods=["POST"])
+@require_roles("teacher", "admin")
+def create_question():
+    data = request.json or {}
+    try:
+        payload = _question_payload(data)
+    except ValueError as exc:
+        return legacy_fail(str(exc), 400, "VALIDATION_ERROR")
+    if not payload["stem"] or not payload["node_ids"]:
+        return legacy_fail("题干和知识点不能为空", 400, "VALIDATION_ERROR")
+    question = db.create_question(payload)
+    audit("exam.question.create", "Question", question["id"], {"type": question.get("type")})
+    return jsonify(question), 201
+
+
+@bp.route("/questions/select", methods=["POST"])
+@require_roles("student", "teacher", "admin")
+def select_questions():
+    data = request.json or {}
+    questions = db.select_questions_for_nodes(
+        data.get("node_ids") or [],
+        data.get("course_id"),
+        int(data.get("count", 10) or 10),
+        int(data["difficulty"]) if data.get("difficulty") else None,
+    )
+    return jsonify(questions)
 
 
 @bp.route("/errors", methods=["POST"])
@@ -76,3 +140,20 @@ def generate_test():
         data["student_id"], data.get("course_id"), int(data.get("count", 10)),
     )
     return jsonify(paper)
+
+
+@bp.route("/test/<paper_id>/submit", methods=["POST"])
+@require_roles("student", "teacher", "admin")
+def submit_test(paper_id):
+    owner_id = db.get_paper_owner(paper_id)
+    if not owner_id:
+        return legacy_fail("试卷不存在", 404, "PAPER_NOT_FOUND")
+    denied = assert_self_or_roles(owner_id, "teacher", "admin")
+    if denied:
+        return denied
+    data = request.json or {}
+    result = db.submit_test_paper(paper_id, owner_id, data.get("answers") or [])
+    if not result:
+        return legacy_fail("试卷不存在", 404, "PAPER_NOT_FOUND")
+    audit("exam.paper.submit", "TestPaper", paper_id, {"student_id": owner_id})
+    return jsonify(result)

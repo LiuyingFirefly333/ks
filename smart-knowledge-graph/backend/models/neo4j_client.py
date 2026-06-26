@@ -1479,7 +1479,7 @@ class Neo4jClient:
     # ---- ???? ----
 
     def generate_test_paper(self, student_id: str, course_id: str = None, count: int = 10) -> dict:
-        """????????? + ???????????????"""
+        """Generate an online paper from weak nodes and the question bank."""
         with self.driver.session() as session:
             result = session.run(
                 """
@@ -1500,14 +1500,310 @@ class Neo4jClient:
                 """, sid=student_id, course_id=course_id, limit=count,
             )
             weak_nodes = [r["node"] for r in result]
-            exercises = []
-            for n in weak_nodes:
-                for ex in (n.get("exercises") or []):
-                    exercises.append({"url": ex, "node_name": n["name"], "node_id": n["id"], "difficulty": n.get("difficulty", 1)})
+            weak_ids = [node["id"] for node in weak_nodes if node.get("id")]
+            questions = self.select_questions_for_nodes(weak_ids, course_id, count)
+            if not questions:
+                questions = self.select_questions_for_nodes([], course_id, count)
+            paper_id = str(uuid.uuid4())
+            session.run(
+                """
+                MATCH (s:Student {id: $sid})
+                CREATE (p:TestPaper {
+                    id: $paper_id,
+                    title: $title,
+                    status: 'generated',
+                    total_score: $total_score,
+                    objective_score: 0,
+                    subjective_pending: 0,
+                    created_at: datetime()
+                })
+                CREATE (s)-[:GENERATED]->(p)
+                WITH p
+                UNWIND $question_ids AS qid
+                MATCH (q:Question {id: qid})
+                MERGE (p)-[:CONTAINS]->(q)
+                """,
+                sid=student_id,
+                paper_id=paper_id,
+                title="智能专项训练",
+                total_score=sum(int(q.get("score", 5) or 5) for q in questions),
+                question_ids=[q["id"] for q in questions],
+            )
             return {
+                "id": paper_id,
                 "student_id": student_id,
                 "weak_nodes": weak_nodes,
-                "exercises": exercises[:count],
+                "questions": questions[:count],
+                "exercises": [],
+            }
+
+    def select_questions_for_nodes(self, node_ids: list[str], course_id: str = None,
+                                   count: int = 10, difficulty: int = None) -> list[dict]:
+        params = {
+            "node_ids": [node_id for node_id in node_ids if node_id],
+            "course_id": course_id,
+            "limit": count,
+            "difficulty": difficulty,
+        }
+        where = ["coalesce(q.status, 'published') = 'published'"]
+        if node_ids:
+            where.append("n.id IN $node_ids")
+        if difficulty:
+            where.append("q.difficulty = $difficulty")
+        if course_id:
+            where.append("EXISTS { MATCH (n)-[:BELONGS_TO]->(:Course {id: $course_id}) }")
+        query = f"""
+        MATCH (q:Question)-[:TESTS]->(n:KnowledgeNode)
+        WHERE {' AND '.join(where)}
+        WITH q, collect(DISTINCT n {{ .id, .name, .category, .difficulty }}) AS nodes
+        RETURN q {{ .id, .type, .stem, .options, .answer, .analysis, .difficulty,
+                   .score, .status, .variant_of, .created_at }} AS question,
+               nodes
+        ORDER BY q.difficulty ASC, q.created_at DESC
+        LIMIT $limit
+        """
+        with self.driver.session() as session:
+            result = session.run(query, params)
+            questions = []
+            for record in result:
+                question = record["question"]
+                nodes = [node for node in (record["nodes"] or []) if node and node.get("id")]
+                question["knowledge_nodes"] = nodes
+                if nodes:
+                    question["node_id"] = nodes[0]["id"]
+                    question["node_name"] = nodes[0]["name"]
+                question["objective"] = question.get("type") in ["single_choice", "multiple_choice", "true_false", "blank"]
+                questions.append(question)
+            return questions
+
+    def list_questions(self, course_id: str = None, node_id: str = None,
+                       question_type: str = None, difficulty: int = None,
+                       status: str = "published", limit: int = 100) -> list[dict]:
+        where = []
+        params = {
+            "course_id": course_id,
+            "node_id": node_id,
+            "question_type": question_type,
+            "difficulty": difficulty,
+            "status": status,
+            "limit": limit,
+        }
+        if status:
+            where.append("coalesce(q.status, 'published') = $status")
+        if node_id:
+            where.append("n.id = $node_id")
+        if question_type:
+            where.append("q.type = $question_type")
+        if difficulty:
+            where.append("q.difficulty = $difficulty")
+        if course_id:
+            where.append("EXISTS { MATCH (n)-[:BELONGS_TO]->(:Course {id: $course_id}) }")
+        query = """
+        MATCH (q:Question)-[:TESTS]->(n:KnowledgeNode)
+        """
+        if where:
+            query += "WHERE " + " AND ".join(where)
+        query += """
+        WITH q, collect(DISTINCT n { .id, .name, .category }) AS nodes
+        RETURN q { .* } AS question, nodes
+        ORDER BY q.created_at DESC
+        LIMIT $limit
+        """
+        with self.driver.session() as session:
+            return [
+                {**record["question"], "knowledge_nodes": record["nodes"]}
+                for record in session.run(query, params)
+            ]
+
+    def create_question(self, data: dict) -> dict:
+        qid = data.get("id") or str(uuid.uuid4())
+        node_ids = data.get("node_ids") or []
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                CREATE (q:Question {
+                    id: $id,
+                    type: $type,
+                    stem: $stem,
+                    options: $options,
+                    answer: $answer,
+                    analysis: $analysis,
+                    difficulty: $difficulty,
+                    score: $score,
+                    status: $status,
+                    variant_of: $variant_of,
+                    created_by: $created_by,
+                    created_at: datetime(),
+                    updated_at: datetime()
+                })
+                WITH q
+                UNWIND $node_ids AS node_id
+                MATCH (n:KnowledgeNode {id: node_id})
+                MERGE (q)-[:TESTS]->(n)
+                RETURN q { .* } AS question
+                """,
+                id=qid,
+                type=data.get("type", "single_choice"),
+                stem=data.get("stem", ""),
+                options=data.get("options", []),
+                answer=data.get("answer", ""),
+                analysis=data.get("analysis", ""),
+                difficulty=int(data.get("difficulty", 1) or 1),
+                score=int(data.get("score", 5) or 5),
+                status=data.get("status", "published"),
+                variant_of=data.get("variant_of", ""),
+                created_by=data.get("created_by", ""),
+                node_ids=node_ids,
+            )
+            record = result.single()
+            question = record["question"] if record else {"id": qid}
+            question["knowledge_nodes"] = [
+                {"id": node_id}
+                for node_id in node_ids
+            ]
+            return question
+
+    def get_paper_owner(self, paper_id: str) -> str | None:
+        with self.driver.session() as session:
+            record = session.run(
+                """
+                MATCH (s:Student)-[:GENERATED]->(:TestPaper {id: $paper_id})
+                RETURN s.id AS student_id
+                """,
+                paper_id=paper_id,
+            ).single()
+            return record["student_id"] if record else None
+
+    @staticmethod
+    def _normalize_answer(value) -> str:
+        if isinstance(value, list):
+            return "|".join(sorted(str(item).strip() for item in value if str(item).strip()))
+        return str(value or "").strip()
+
+    def submit_test_paper(self, paper_id: str, student_id: str, answers: list[dict]) -> dict:
+        answer_map = {item.get("question_id"): item.get("answer", "") for item in answers}
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (s:Student {id: $sid})-[:GENERATED]->(p:TestPaper {id: $paper_id})-[:CONTAINS]->(q:Question)
+                OPTIONAL MATCH (q)-[:TESTS]->(n:KnowledgeNode)
+                RETURN p { .* } AS paper,
+                       q { .id, .type, .stem, .answer, .analysis, .score } AS question,
+                       collect(DISTINCT n { .id, .name }) AS nodes
+                """,
+                sid=student_id,
+                paper_id=paper_id,
+            )
+            records = list(result)
+            if not records:
+                return {}
+
+            total_score = 0
+            objective_score = 0
+            pending = 0
+            attempts = []
+            objective_types = {"single_choice", "multiple_choice", "true_false", "blank"}
+            for record in records:
+                q = record["question"]
+                nodes = [node for node in (record["nodes"] or []) if node and node.get("id")]
+                student_answer = answer_map.get(q["id"], "")
+                score = int(q.get("score", 5) or 5)
+                total_score += score
+                is_objective = q.get("type") in objective_types
+                is_correct = False
+                gained = 0
+                status = "pending_review"
+                if is_objective:
+                    is_correct = self._normalize_answer(student_answer) == self._normalize_answer(q.get("answer"))
+                    gained = score if is_correct else 0
+                    objective_score += gained
+                    status = "graded"
+                else:
+                    pending += 1
+
+                attempt_id = str(uuid.uuid4())
+                session.run(
+                    """
+                    MATCH (s:Student {id: $sid})
+                    MATCH (p:TestPaper {id: $paper_id})
+                    MATCH (q:Question {id: $qid})
+                    CREATE (a:AnswerAttempt {
+                        id: $attempt_id,
+                        answer: $answer,
+                        correct_answer: $correct_answer,
+                        is_correct: $is_correct,
+                        score: $score,
+                        max_score: $max_score,
+                        status: $status,
+                        created_at: datetime()
+                    })
+                    CREATE (s)-[:ANSWERED]->(a)
+                    CREATE (a)-[:FOR_QUESTION]->(q)
+                    CREATE (a)-[:IN_PAPER]->(p)
+                    FOREACH (node_id IN $node_ids |
+                        MERGE (n:KnowledgeNode {id: node_id})
+                        CREATE (a)-[:RELATES_TO]->(n)
+                    )
+                    """,
+                    sid=student_id,
+                    paper_id=paper_id,
+                    qid=q["id"],
+                    attempt_id=attempt_id,
+                    answer=self._normalize_answer(student_answer),
+                    correct_answer=self._normalize_answer(q.get("answer")),
+                    is_correct=is_correct,
+                    score=gained,
+                    max_score=score,
+                    status=status,
+                    node_ids=[node["id"] for node in nodes],
+                )
+
+                if is_objective and not is_correct and nodes:
+                    self.create_error(
+                        student_id,
+                        nodes[0]["id"],
+                        q.get("stem", ""),
+                        self._normalize_answer(q.get("answer")),
+                        self._normalize_answer(student_answer),
+                        q.get("analysis", ""),
+                    )
+
+                attempts.append({
+                    "id": attempt_id,
+                    "question_id": q["id"],
+                    "stem": q.get("stem", ""),
+                    "type": q.get("type"),
+                    "student_answer": self._normalize_answer(student_answer),
+                    "correct_answer": self._normalize_answer(q.get("answer")),
+                    "analysis": q.get("analysis", ""),
+                    "is_correct": is_correct,
+                    "score": gained,
+                    "max_score": score,
+                    "status": status,
+                    "knowledge_nodes": nodes,
+                })
+
+            session.run(
+                """
+                MATCH (p:TestPaper {id: $paper_id})
+                SET p.status = CASE WHEN $pending > 0 THEN 'pending_review' ELSE 'graded' END,
+                    p.total_score = $total_score,
+                    p.objective_score = $objective_score,
+                    p.subjective_pending = $pending,
+                    p.submitted_at = datetime()
+                """,
+                paper_id=paper_id,
+                total_score=total_score,
+                objective_score=objective_score,
+                pending=pending,
+            )
+            return {
+                "paper_id": paper_id,
+                "total_score": total_score,
+                "objective_score": objective_score,
+                "subjective_pending": pending,
+                "attempts": attempts,
+                "status": "pending_review" if pending else "graded",
             }
 
 

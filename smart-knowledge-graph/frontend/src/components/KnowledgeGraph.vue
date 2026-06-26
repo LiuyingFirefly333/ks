@@ -39,6 +39,7 @@ const props = defineProps({
   nodes: { type: Array, default: () => [] },
   links: { type: Array, default: () => [] },
   highlightedPath: { type: Array, default: () => [] },
+  highlightedPaths: { type: Array, default: () => [] },
   searchNodeId: { type: String, default: null },
   selectedNodeId: { type: String, default: null },
   masteryMap: { type: Object, default: () => ({}) },
@@ -50,13 +51,15 @@ const props = defineProps({
   selectedNodeIds: { type: Array, default: () => [] },
   relationSourceId: { type: String, default: '' },
   nodePositions: { type: Object, default: () => ({}) },
+  viewportTransform: { type: Object, default: null },
+  initialLayoutMode: { type: String, default: 'dagre' },
 })
 
-const emit = defineEmits(['select-node', 'select-link', 'node-position-change'])
+const emit = defineEmits(['select-node', 'select-link', 'node-position-change', 'viewport-change', 'layout-change'])
 
 const container = ref(null)
 const svgEl = ref(null)
-const layoutMode = ref('dagre')
+const layoutMode = ref(props.initialLayoutMode === 'force' ? 'force' : 'dagre')
 
 let simulation = null
 let svg = null
@@ -93,6 +96,12 @@ const MASTERY_COLORS = {
 }
 
 const HEAT_COLORS = ['#16a34a', '#84cc16', '#f59e0b', '#f97316', '#ef4444', '#b91c1c']
+const DEFAULT_PATH_STYLES = {
+  shortest: { label: '最短路径', color: '#ef4444' },
+  easy: { label: '最轻松', color: '#16a34a' },
+  thorough: { label: '最扎实', color: '#2563eb' },
+  roadmap: { label: '路线图', color: '#7c3aed' },
+}
 
 function getHeatColor(avgScore) {
   if (avgScore >= 85) return HEAT_COLORS[0]
@@ -133,21 +142,97 @@ function getNodeState(node) {
 }
 
 function isInPath(nodeId) {
-  return props.highlightedPath.includes(nodeId)
+  return nodePathMatches(nodeId).length > 0
+}
+
+function normalizeHighlightedPath(group, index = 0) {
+  if (Array.isArray(group)) {
+    return {
+      type: index === 0 ? 'shortest' : `path-${index + 1}`,
+      label: index === 0 ? '推荐路径' : `路径 ${index + 1}`,
+      color: ['#ef4444', '#16a34a', '#2563eb'][index] || '#7c3aed',
+      nodes: group.map(normalizeId).filter(Boolean),
+    }
+  }
+
+  const type = group?.type || `path-${index + 1}`
+  const defaults = DEFAULT_PATH_STYLES[type] || {}
+  const rawNodes = group?.nodes || group?.path || []
+  return {
+    type,
+    label: group?.label || defaults.label || `路径 ${index + 1}`,
+    color: group?.color || defaults.color || '#7c3aed',
+    nodes: rawNodes.map(normalizeId).filter(Boolean),
+    total_estimated_time: group?.total_estimated_time || 0,
+  }
+}
+
+function highlightedPathGroups() {
+  if (props.highlightedPaths.length) {
+    return props.highlightedPaths.map(normalizeHighlightedPath).filter(group => group.nodes.length)
+  }
+  if (props.highlightedPath.length) return [normalizeHighlightedPath(props.highlightedPath, 0)]
+  return []
+}
+
+function nodePathMatches(nodeId) {
+  return highlightedPathGroups().filter(group => group.nodes.includes(nodeId))
 }
 
 function pathEdgeSet() {
-  const set = new Set()
-  for (let i = 0; i < props.highlightedPath.length - 1; i++) {
-    set.add(`${props.highlightedPath[i]}->${props.highlightedPath[i + 1]}`)
-  }
-  return set
+  const map = new Map()
+  highlightedPathGroups().forEach(group => {
+    for (let i = 0; i < group.nodes.length - 1; i++) {
+      const key = `${group.nodes[i]}->${group.nodes[i + 1]}`
+      const matches = map.get(key) || []
+      matches.push(group)
+      map.set(key, matches)
+    }
+  })
+  return map
+}
+
+function pathNodeMap() {
+  const map = new Map()
+  highlightedPathGroups().forEach(group => {
+    group.nodes.forEach(nodeId => {
+      const matches = map.get(nodeId) || []
+      matches.push(group)
+      map.set(nodeId, matches)
+    })
+  })
+  return map
+}
+
+function pathMatchesForLink(link, pathSet = pathEdgeSet()) {
+  const source = normalizeId(link.source)
+  const target = normalizeId(link.target)
+  return pathSet.get(`${source}->${target}`) || []
+}
+
+function pathMatchForLink(link, pathSet = pathEdgeSet()) {
+  return pathMatchesForLink(link, pathSet)[0] || null
+}
+
+function pathLabelForLink(link, pathSet = pathEdgeSet()) {
+  const matches = pathMatchesForLink(link, pathSet)
+  if (!matches.length) return ''
+  return matches.map(item => item.label).join(' / ')
+}
+
+function pathNodeColors(nodeId, nodeMap = pathNodeMap()) {
+  const seen = new Set()
+  return (nodeMap.get(nodeId) || [])
+    .filter(group => {
+      if (seen.has(group.type)) return false
+      seen.add(group.type)
+      return true
+    })
+    .map(group => group.color)
 }
 
 function isPathLink(link, pathSet = pathEdgeSet()) {
-  const source = normalizeId(link.source)
-  const target = normalizeId(link.target)
-  return pathSet.has(`${source}->${target}`)
+  return pathMatchesForLink(link, pathSet).length > 0
 }
 
 function linkKey(link) {
@@ -156,6 +241,48 @@ function linkKey(link) {
 
 function isSelectedLink(link) {
   return props.selectedLinkKey && props.selectedLinkKey === linkKey(link)
+}
+
+function isRelatedLink(link) {
+  return (link.type || 'RELATED_TO') === 'RELATED_TO'
+}
+
+function linkClass(link, pathSet) {
+  return [
+    'graph-link',
+    isRelatedLink(link) ? 'is-related' : 'is-prerequisite',
+    isPathLink(link, pathSet) ? 'is-path' : '',
+    isSelectedLink(link) ? 'is-selected' : '',
+  ].filter(Boolean).join(' ')
+}
+
+function linkStroke(link, pathSet) {
+  if (isSelectedLink(link)) return '#0f172a'
+  if (isPathLink(link, pathSet)) return pathMatchForLink(link, pathSet).color
+  return isRelatedLink(link) ? '#94a3b8' : '#64748b'
+}
+
+function linkStrokeWidth(link, pathSet) {
+  if (isSelectedLink(link)) return 4
+  if (isPathLink(link, pathSet)) return 3 + Math.min(pathMatchesForLink(link, pathSet).length - 1, 2) * 0.8
+  return Math.max(1.5, (link.weight || 1) * 1.2)
+}
+
+function linkOpacity(link, pathSet) {
+  if (isPathLink(link, pathSet)) return 0.95
+  if (isSelectedLink(link)) return 0.9
+  return isRelatedLink(link) ? 0.5 : 0.68
+}
+
+function linkDash(link, pathSet) {
+  if (isPathLink(link, pathSet)) return null
+  return isRelatedLink(link) ? '7 6' : null
+}
+
+function linkMarker(link, pathSet) {
+  const match = pathMatchForLink(link, pathSet)
+  if (match) return `url(#arrow-path-${match.type})`
+  return isRelatedLink(link) ? null : 'url(#arrow-prerequisite)'
 }
 
 function normalizeId(value) {
@@ -180,6 +307,7 @@ function relationLabel(type) {
 function setLayout(mode) {
   if (layoutMode.value === mode) return
   layoutMode.value = mode
+  emit('layout-change', mode)
   nextTick(() => initGraph())
 }
 
@@ -296,8 +424,7 @@ async function initGraph() {
 
   const defs = svg.append('defs')
   createArrow(defs, 'arrow-prerequisite', '#64748b')
-  createArrow(defs, 'arrow-related', '#94a3b8')
-  createArrow(defs, 'arrow-path', '#ef4444')
+  highlightedPathGroups().forEach(group => createArrow(defs, `arrow-path-${group.type}`, group.color))
   createGlow(defs)
 
   g = svg.append('g').attr('class', 'graph-layer')
@@ -308,7 +435,10 @@ async function initGraph() {
   zoomBehavior = d3.zoom()
     .scaleExtent([MIN_ZOOM, MAX_ZOOM])
     .filter(event => !event.ctrlKey || event.type === 'wheel')
-    .on('zoom', event => g.attr('transform', event.transform))
+    .on('zoom', event => {
+      g.attr('transform', event.transform)
+      emitViewport(event.transform)
+    })
   svg.call(zoomBehavior)
   svg.on('dblclick.zoom', null)
 
@@ -325,22 +455,17 @@ async function initGraph() {
   applyStoredPositions(nodeData)
 
   const pathSet = pathEdgeSet()
+  const nodePathSet = pathNodeMap()
   const links = linkLayer.selectAll('path')
     .data(linkData, linkKey)
     .join('path')
-    .attr('class', d => `graph-link ${isPathLink(d, pathSet) ? 'is-path' : ''} ${isSelectedLink(d) ? 'is-selected' : ''}`)
+    .attr('class', d => linkClass(d, pathSet))
     .attr('cursor', props.editable ? 'pointer' : null)
-    .attr('stroke', d => {
-      if (isSelectedLink(d)) return '#0f172a'
-      return isPathLink(d, pathSet) ? '#ef4444' : (d.type === 'RELATED_TO' ? '#94a3b8' : '#64748b')
-    })
-    .attr('stroke-width', d => isSelectedLink(d) ? 4 : (isPathLink(d, pathSet) ? 3 : Math.max(1.4, (d.weight || 1) * 1.2)))
-    .attr('stroke-opacity', d => isPathLink(d, pathSet) ? 0.95 : 0.42)
-    .attr('stroke-dasharray', d => d.type === 'RELATED_TO' ? '6 5' : null)
-    .attr('marker-end', d => {
-      if (isPathLink(d, pathSet)) return 'url(#arrow-path)'
-      return d.type === 'RELATED_TO' ? 'url(#arrow-related)' : 'url(#arrow-prerequisite)'
-    })
+    .attr('stroke', d => linkStroke(d, pathSet))
+    .attr('stroke-width', d => linkStrokeWidth(d, pathSet))
+    .attr('stroke-opacity', d => linkOpacity(d, pathSet))
+    .attr('stroke-dasharray', d => linkDash(d, pathSet))
+    .attr('marker-end', d => linkMarker(d, pathSet))
     .on('click', (event, link) => {
       if (!props.editable) return
       event.stopPropagation()
@@ -351,8 +476,8 @@ async function initGraph() {
     .data(linkData.filter(link => isPathLink(link, pathSet) || layoutMode.value === 'dagre'))
     .join('text')
     .attr('class', 'graph-edge-label')
-    .text(d => relationLabel(d.type))
-    .attr('fill', d => isPathLink(d, pathSet) ? '#dc2626' : '#64748b')
+    .text(d => pathLabelForLink(d, pathSet) || relationLabel(d.type))
+    .attr('fill', d => pathMatchForLink(d, pathSet)?.color || '#64748b')
 
   const nodes = nodeLayer.selectAll('g')
     .data(nodeData)
@@ -374,11 +499,27 @@ async function initGraph() {
     .attr('stroke', d => {
       if (d.id === props.selectedNodeId) return '#0f172a'
       if (d.id === props.searchNodeId) return '#7c3aed'
-      if (isInPath(d.id)) return '#ef4444'
+      const pathColors = pathNodeColors(d.id, nodePathSet)
+      if (pathColors.length) return pathColors[0]
       return '#dbe3ed'
     })
     .attr('stroke-width', d => (d.id === props.selectedNodeId || d.id === props.searchNodeId || isInPath(d.id)) ? 2.4 : 1.2)
     .attr('filter', d => d.id === props.selectedNodeId || isInPath(d.id) ? 'url(#node-glow)' : null)
+
+  nodes.each(function (node) {
+    const colors = pathNodeColors(node.id, nodePathSet)
+    if (!colors.length) return
+    const group = d3.select(this).append('g').attr('class', 'path-node-stripes')
+    colors.slice(0, 3).forEach((color, index) => {
+      group.append('rect')
+        .attr('x', -NODE_W / 2 + 8 + index * 14)
+        .attr('y', -NODE_H / 2 + 6)
+        .attr('width', 10)
+        .attr('height', 4)
+        .attr('rx', 2)
+        .attr('fill', color)
+    })
+  })
 
   nodes.append('circle')
     .attr('cx', -NODE_W / 2 + 21)
@@ -425,10 +566,10 @@ async function initGraph() {
     if (!props.editMode) clampNodes(nodeData, width, height)
     render(links, nodes, edgeLabels)
     simulation.alpha(0.18).restart()
-    setTimeout(() => fitToScreen(), 260)
+    restoreOrFit(260)
   } else {
     render(links, nodes, edgeLabels)
-    setTimeout(() => fitToScreen(), 80)
+    restoreOrFit(80)
   }
 }
 
@@ -504,14 +645,17 @@ function createArrow(defs, id, color) {
   defs.append('marker')
     .attr('id', id)
     .attr('viewBox', '0 -5 10 10')
-    .attr('refX', 11)
+    .attr('refX', 9.2)
     .attr('refY', 0)
-    .attr('markerWidth', 7)
-    .attr('markerHeight', 7)
+    .attr('markerWidth', 6.5)
+    .attr('markerHeight', 6.5)
+    .attr('markerUnits', 'strokeWidth')
     .attr('orient', 'auto')
+    .attr('overflow', 'visible')
     .append('path')
-    .attr('d', 'M0,-5L10,0L0,5')
+    .attr('d', 'M0,-4L9,0L0,4Z')
     .attr('fill', color)
+    .attr('fill-opacity', 0.95)
 }
 
 function createGlow(defs) {
@@ -540,19 +684,15 @@ function render(links, nodes, edgeLabels) {
 function updateVisualState() {
   if (!g) return
   const pathSet = pathEdgeSet()
+  const nodePathSet = pathNodeMap()
 
   g.selectAll('.graph-link')
-    .attr('class', d => `graph-link ${isPathLink(d, pathSet) ? 'is-path' : ''} ${isSelectedLink(d) ? 'is-selected' : ''}`)
-    .attr('stroke', d => {
-      if (isSelectedLink(d)) return '#0f172a'
-      return isPathLink(d, pathSet) ? '#ef4444' : (d.type === 'RELATED_TO' ? '#94a3b8' : '#64748b')
-    })
-    .attr('stroke-width', d => isSelectedLink(d) ? 4 : (isPathLink(d, pathSet) ? 3 : Math.max(1.4, (d.weight || 1) * 1.2)))
-    .attr('stroke-opacity', d => isPathLink(d, pathSet) ? 0.95 : 0.42)
-    .attr('marker-end', d => {
-      if (isPathLink(d, pathSet)) return 'url(#arrow-path)'
-      return d.type === 'RELATED_TO' ? 'url(#arrow-related)' : 'url(#arrow-prerequisite)'
-    })
+    .attr('class', d => linkClass(d, pathSet))
+    .attr('stroke', d => linkStroke(d, pathSet))
+    .attr('stroke-width', d => linkStrokeWidth(d, pathSet))
+    .attr('stroke-opacity', d => linkOpacity(d, pathSet))
+    .attr('stroke-dasharray', d => linkDash(d, pathSet))
+    .attr('marker-end', d => linkMarker(d, pathSet))
 
   const edgeLabels = g.select('.graph-edge-label-layer')
     .selectAll('text')
@@ -564,13 +704,13 @@ function updateVisualState() {
   edgeLabels.join(
     enter => enter.append('text')
       .attr('class', 'graph-edge-label')
-      .text(d => relationLabel(d.type))
-      .attr('fill', d => isPathLink(d, pathSet) ? '#dc2626' : '#64748b')
+      .text(d => pathLabelForLink(d, pathSet) || relationLabel(d.type))
+      .attr('fill', d => pathMatchForLink(d, pathSet)?.color || '#64748b')
       .attr('x', d => (coord(d.source).x + coord(d.target).x) / 2)
       .attr('y', d => (coord(d.source).y + coord(d.target).y) / 2 - 8),
     update => update
-      .text(d => relationLabel(d.type))
-      .attr('fill', d => isPathLink(d, pathSet) ? '#dc2626' : '#64748b')
+      .text(d => pathLabelForLink(d, pathSet) || relationLabel(d.type))
+      .attr('fill', d => pathMatchForLink(d, pathSet)?.color || '#64748b')
       .attr('x', d => (coord(d.source).x + coord(d.target).x) / 2)
       .attr('y', d => (coord(d.source).y + coord(d.target).y) / 2 - 8),
     exit => exit.remove(),
@@ -583,11 +723,29 @@ function updateVisualState() {
     .attr('stroke', d => {
       if (d.id === props.selectedNodeId) return '#0f172a'
       if (d.id === props.searchNodeId) return '#7c3aed'
-      if (isInPath(d.id)) return '#ef4444'
+      const pathColors = pathNodeColors(d.id, nodePathSet)
+      if (pathColors.length) return pathColors[0]
       return '#dbe3ed'
     })
     .attr('stroke-width', d => (d.id === props.selectedNodeId || d.id === props.searchNodeId || isInPath(d.id)) ? 2.4 : 1.2)
     .attr('filter', d => d.id === props.selectedNodeId || isInPath(d.id) ? 'url(#node-glow)' : null)
+
+  nodeCards.each(function (node) {
+    const card = d3.select(this)
+    card.select('.path-node-stripes').remove()
+    const colors = pathNodeColors(node.id, nodePathSet)
+    if (!colors.length) return
+    const group = card.append('g').attr('class', 'path-node-stripes')
+    colors.slice(0, 3).forEach((color, index) => {
+      group.append('rect')
+        .attr('x', -NODE_W / 2 + 8 + index * 14)
+        .attr('y', -NODE_H / 2 + 6)
+        .attr('width', 10)
+        .attr('height', 4)
+        .attr('rx', 2)
+        .attr('fill', color)
+    })
+  })
 
   nodeCards.select('circle')
     .attr('fill', d => getColor(d))
@@ -630,6 +788,49 @@ function linkPath(link) {
 function coord(value) {
   if (typeof value === 'object') return value
   return currentNodes.find(node => node.id === value) || { x: 0, y: 0 }
+}
+
+function normalizeViewportTransform(value) {
+  if (!value) return null
+  const x = Number(value.x)
+  const y = Number(value.y)
+  const k = Number(value.k)
+  if (![x, y, k].every(Number.isFinite) || k <= 0) return null
+  return { x, y, k: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, k)) }
+}
+
+function emitViewport(transform) {
+  if (!transform) return
+  emit('viewport-change', {
+    x: transform.x,
+    y: transform.y,
+    k: transform.k,
+    layoutMode: layoutMode.value,
+  })
+}
+
+function currentViewport() {
+  if (!svgEl.value) return null
+  return normalizeViewportTransform(d3.zoomTransform(svgEl.value))
+}
+
+function applyViewport(transform, duration = 0) {
+  const normalized = normalizeViewportTransform(transform)
+  if (!normalized || !svg || !zoomBehavior) return false
+  const target = d3.zoomIdentity.translate(normalized.x, normalized.y).scale(normalized.k)
+  const selection = duration ? svg.transition().duration(duration).ease(d3.easeCubicOut) : svg
+  selection.call(zoomBehavior.transform, target)
+  return true
+}
+
+function restoreOrFit(delay) {
+  setTimeout(() => {
+    if (props.viewportTransform?.layoutMode && props.viewportTransform.layoutMode !== layoutMode.value) {
+      fitToScreen()
+      return
+    }
+    if (!applyViewport(props.viewportTransform, 0)) fitToScreen()
+  }, delay)
 }
 
 function fitToScreen() {
@@ -692,14 +893,16 @@ function exportSVG() {
 }
 
 function exportJSON() {
-  const data = { nodes: props.nodes, links: props.links, mastery: props.masteryMap }
+  const data = { nodes: props.nodes, links: props.links, mastery: props.masteryMap, highlighted_paths: highlightedPathGroups() }
   download('knowledge-graph.json', 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(data, null, 2)))
 }
 
 function exportCSV() {
-  const rows = ['id,name,category,difficulty,estimated_time,mastery_score']
+  const nodeMap = pathNodeMap()
+  const rows = ['id,name,category,difficulty,estimated_time,mastery_score,highlighted_paths']
   props.nodes.forEach(node => {
     const mastery = props.masteryMap[node.id]
+    const pathLabels = (nodeMap.get(node.id) || []).map(group => group.label).join('|')
     rows.push([
       node.id,
       '"' + String(node.name || '').replaceAll('"', '""') + '"',
@@ -707,6 +910,7 @@ function exportCSV() {
       node.difficulty || 1,
       node.estimated_time || 0,
       mastery?.score || 0,
+      '"' + pathLabels.replaceAll('"', '""') + '"',
     ].join(','))
   })
   download('knowledge-graph.csv', 'data:text/csv;charset=utf-8,' + encodeURIComponent(rows.join('\n')))
@@ -730,6 +934,22 @@ watch(
 )
 
 watch(
+  () => props.highlightedPaths,
+  scheduleInit,
+  { deep: true },
+)
+
+watch(
+  () => props.initialLayoutMode,
+  mode => {
+    const normalized = mode === 'force' ? 'force' : 'dagre'
+    if (layoutMode.value === normalized) return
+    layoutMode.value = normalized
+    scheduleInit()
+  },
+)
+
+watch(
   () => [props.highlightedPath, props.masteryMap, props.heatmapData, props.heatmapMode, props.selectedNodeId, props.searchNodeId, props.selectedLinkKey, props.selectedNodeIds, props.relationSourceId],
   () => nextTick(() => updateVisualState()),
   { deep: true },
@@ -748,5 +968,5 @@ onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect()
 })
 
-defineExpose({ fitToScreen, locateNode, zoomBy })
+defineExpose({ fitToScreen, locateNode, zoomBy, getViewport: currentViewport })
 </script>

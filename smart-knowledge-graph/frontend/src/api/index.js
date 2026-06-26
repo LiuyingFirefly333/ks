@@ -208,8 +208,13 @@ export const examApi = {
   listErrors: (studentId) => api.get('/exam/errors/' + studentId).then(r => r.data),
   deleteError: (errorId) => api.delete('/exam/errors/' + errorId).then(r => r.data),
   errorTrace: (errorId) => api.get('/exam/errors/' + errorId + '/trace').then(r => r.data),
+  listQuestions: (params = {}) => api.get('/exam/questions', { params }).then(r => r.data),
+  createQuestion: (data) => api.post('/exam/questions', data).then(r => r.data),
+  selectQuestions: (data) => api.post('/exam/questions/select', data).then(r => r.data),
   generateTest: (studentId, courseId, count) =>
     api.post('/exam/test/generate', { student_id: studentId, course_id: courseId, count: count || 10 }).then(r => r.data),
+  submitTest: (paperId, answers) =>
+    api.post('/exam/test/' + paperId + '/submit', { answers }).then(r => r.data),
 }
 
 // Admin
