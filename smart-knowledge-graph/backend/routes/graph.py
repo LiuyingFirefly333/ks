@@ -1,8 +1,30 @@
 from flask import Blueprint, request, jsonify
 from models.neo4j_client import db
-from routes.security import audit, assert_self_or_roles, legacy_fail, require_roles
+from routes.security import audit, assert_self_or_roles, current_role, current_user_id, legacy_fail, require_roles
 
 bp = Blueprint("graph", __name__, url_prefix="/api/graph")
+
+
+RELATION_TYPES = {"PREREQUISITE", "RELATED_TO"}
+
+
+def _normalize_relation_type(value):
+    rel_type = str(value or "").upper()
+    if rel_type not in RELATION_TYPES:
+        return None
+    return rel_type
+
+
+def _can_edit_relation(source_id, target_id):
+    if current_role() == "admin":
+        return True
+    if current_role() != "teacher":
+        return False
+    teacher_id = current_user_id()
+    return (
+        db.can_teacher_edit_node(teacher_id, source_id)
+        and db.can_teacher_edit_node(teacher_id, target_id)
+    )
 
 
 @bp.route("", methods=["GET"])
@@ -44,13 +66,56 @@ def create_relation():
     data = request.json or {}
     if not all(k in data for k in ("source", "target", "type")):
         return legacy_fail("缺少必填字段：source、target、type", 400, "VALIDATION_ERROR")
-    rel_type = data["type"].upper()
-    if rel_type not in ("PREREQUISITE", "RELATED_TO"):
+    if data["source"] == data["target"]:
+        return legacy_fail("不能创建指向自身的关系", 400, "VALIDATION_ERROR")
+    rel_type = _normalize_relation_type(data["type"])
+    if not rel_type:
         return legacy_fail("关系类型必须是 PREREQUISITE 或 RELATED_TO", 400, "VALIDATION_ERROR")
+    if not _can_edit_relation(data["source"], data["target"]):
+        return legacy_fail("无权维护该关系", 403, "FORBIDDEN")
     weight = float(data.get("weight", 1.0))
     rel = db.create_relation(data["source"], data["target"], rel_type, weight)
+    if not rel:
+        return legacy_fail("源知识点或目标知识点不存在", 404, "KNOWLEDGE_NOT_FOUND")
     audit("graph.relation.create", "Relation", f"{data['source']}->{data['target']}", {"type": rel_type})
     return jsonify(rel), 201
+
+
+@bp.route("/relations", methods=["PUT"])
+@require_roles("teacher", "admin")
+def update_relation():
+    data = request.json or {}
+    required = ("source", "target", "type", "new_source", "new_target", "new_type")
+    if not all(k in data for k in required):
+        return legacy_fail("缺少必填字段：source、target、type、new_source、new_target、new_type", 400, "VALIDATION_ERROR")
+    rel_type = _normalize_relation_type(data["type"])
+    new_rel_type = _normalize_relation_type(data["new_type"])
+    if not rel_type or not new_rel_type:
+        return legacy_fail("关系类型必须是 PREREQUISITE 或 RELATED_TO", 400, "VALIDATION_ERROR")
+    if data["new_source"] == data["new_target"]:
+        return legacy_fail("不能创建指向自身的关系", 400, "VALIDATION_ERROR")
+    if not _can_edit_relation(data["source"], data["target"]) or not _can_edit_relation(data["new_source"], data["new_target"]):
+        return legacy_fail("无权维护该关系", 403, "FORBIDDEN")
+
+    weight = float(data.get("weight", 1.0))
+    rel = db.update_relation(
+        data["source"],
+        data["target"],
+        rel_type,
+        data["new_source"],
+        data["new_target"],
+        new_rel_type,
+        weight,
+    )
+    if not rel:
+        return legacy_fail("关系不存在", 404, "RELATION_NOT_FOUND")
+    audit("graph.relation.update", "Relation", f"{data['source']}->{data['target']}", {
+        "type": rel_type,
+        "new_source": data["new_source"],
+        "new_target": data["new_target"],
+        "new_type": new_rel_type,
+    })
+    return jsonify(rel)
 
 
 @bp.route("/relations", methods=["DELETE"])
@@ -59,7 +124,11 @@ def delete_relation():
     data = request.json or {}
     if not all(k in data for k in ("source", "target", "type")):
         return legacy_fail("缺少必填字段：source、target、type", 400, "VALIDATION_ERROR")
-    rel_type = data["type"].upper()
+    rel_type = _normalize_relation_type(data["type"])
+    if not rel_type:
+        return legacy_fail("关系类型必须是 PREREQUISITE 或 RELATED_TO", 400, "VALIDATION_ERROR")
+    if not _can_edit_relation(data["source"], data["target"]):
+        return legacy_fail("无权维护该关系", 403, "FORBIDDEN")
     if db.delete_relation(data["source"], data["target"], rel_type):
         audit("graph.relation.delete", "Relation", f"{data['source']}->{data['target']}", {"type": rel_type})
         return jsonify({"message": "关系删除成功", "success": True})
@@ -77,7 +146,8 @@ def get_neighbors():
             """
             MATCH (n:KnowledgeNode {id: $id})-[r]-(m:KnowledgeNode)
             RETURN m { .* } as node,
-                   r { .* } as rel
+                   r { .* } as rel,
+                   type(r) as rel_type
             """,
             id=node_id,
         )
@@ -85,6 +155,6 @@ def get_neighbors():
         for record in result:
             neighbors.append({
                 "node": record["node"],
-                "relation": record["rel"],
+                "relation": {**(record["rel"] or {}), "type": record["rel_type"]},
             })
         return jsonify(neighbors)

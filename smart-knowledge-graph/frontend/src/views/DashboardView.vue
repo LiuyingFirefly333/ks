@@ -17,14 +17,14 @@
       <div class="topbar-user">
         <span class="user-role-badge">{{ roleLabel }}</span>
         <span class="user-name">{{ user?.name || '未命名用户' }}</span>
-        <button class="ghost-button" @click="activeNav = 'profile'">个人中心</button>
+        <button class="ghost-button" @click="switchNav('profile')">个人中心</button>
         <button class="ghost-button" @click="$emit('logout')">退出</button>
       </div>
     </header>
 
     <div class="app-body">
       <aside class="course-sidebar workspace-sidebar">
-        <section class="sidebar-section">
+        <section class="sidebar-section nav-section">
           <div class="course-sidebar-head">
             <div>
               <span class="sidebar-eyebrow">工作台</span>
@@ -107,7 +107,15 @@
             :masteryMap="masteryMap"
             :heatmapData="heatmapData"
             :heatmapMode="heatmapMode"
+            :editable="canEditGraph"
+            :editMode="graphEditMode"
+            :selectedLinkKey="selectedLink?.key || ''"
+            :selectedNodeIds="batchSelectedIds"
+            :relationSourceId="relationSourceId"
+            :nodePositions="graphPositions"
             @select-node="onSelectNode"
+            @select-link="onSelectLink"
+            @node-position-change="onNodePositionChange"
           />
           <div v-if="!currentCourseId" class="graph-empty">
             <div class="empty-kicker">等待课程</div>
@@ -117,6 +125,14 @@
         </div>
 
         <div v-if="activeNav === 'graph'" class="floating-tools">
+          <button
+            v-if="canEditGraph"
+            :class="{ active: graphEditMode }"
+            title="图谱编辑"
+            @click="toggleGraphEdit"
+          >
+            {{ graphEditMode ? '完成' : '编辑' }}
+          </button>
           <button title="适应画布" @click="fitGraph">适应</button>
           <button title="放大" @click="zoomIn">+</button>
           <button title="缩小" @click="zoomOut">-</button>
@@ -139,7 +155,7 @@
               <h2>{{ currentNavLabel }}</h2>
               <p>{{ currentNavHint }}</p>
             </div>
-            <button class="soft-button" @click="activeNav = 'graph'">返回图谱</button>
+            <button class="soft-button" @click="switchNav('graph')">返回图谱</button>
           </div>
 
           <div class="workspace-page-body">
@@ -206,6 +222,12 @@
 
             <AdminDashboard v-if="activeNav === 'admin'" @locate="onLocateNodeId" />
 
+            <ResourceLibrary
+              v-if="activeNav === 'resources'"
+              :courseId="currentCourseId"
+              :nodes="nodes"
+            />
+
             <div v-if="activeNav === 'manage'" class="manage-grid">
               <section class="manage-form">
                 <h3>知识点维护</h3>
@@ -268,7 +290,37 @@
       </main>
 
       <aside
-        v-if="selectedNode && !['profile', 'admin', 'manage'].includes(activeNav)"
+        v-if="activeNav === 'graph' && graphEditMode && canEditGraph"
+        class="slide-panel graph-editor-slide"
+      >
+        <GraphEditorPanel
+          :node="selectedNode"
+          :link="selectedLink"
+          :nodes="nodes"
+          :selectedNodeIds="batchSelectedIds"
+          :relationSourceId="relationSourceId"
+          :relationDraftType="relationDraftType"
+          :relationDraftWeight="relationDraftWeight"
+          :batchMode="batchMode"
+          @close="toggleGraphEdit(false)"
+          @save-node="onSaveNode"
+          @delete-node="onDeleteNode"
+          @start-relation="onStartRelation"
+          @cancel-relation="onCancelRelation"
+          @create-relation="onCreateRelationFromEditor"
+          @save-link="onSaveLink"
+          @delete-link="onDeleteLink"
+          @update-relation-draft="onUpdateRelationDraft"
+          @toggle-batch="toggleBatchMode"
+          @clear-selection="clearBatchSelection"
+          @batch-update="onBatchUpdate"
+          @batch-delete="onBatchDelete"
+          @create-node="onCreateNodeFromEditor"
+        />
+      </aside>
+
+      <aside
+        v-else-if="selectedNode && !['profile', 'admin', 'manage', 'resources'].includes(activeNav)"
         class="slide-panel"
       >
         <KnowledgePanel
@@ -291,39 +343,48 @@ import { knowledgeApi, graphApi, courseApi, analyticsApi, classroomApi } from '.
 import KnowledgeGraph from '../components/KnowledgeGraph.vue'
 import KnowledgeSearch from '../components/KnowledgeSearch.vue'
 import KnowledgePanel from '../components/KnowledgePanel.vue'
+import GraphEditorPanel from '../components/GraphEditorPanel.vue'
 import PathRecommend from '../components/PathRecommend.vue'
 import ChatPanel from '../components/ChatPanel.vue'
 import ErrorBook from '../components/ErrorBook.vue'
 import TestPaper from '../components/TestPaper.vue'
 import AdminDashboard from '../components/AdminDashboard.vue'
 import ProfileCenter from '../components/ProfileCenter.vue'
+import ResourceLibrary from '../components/ResourceLibrary.vue'
 
 const props = defineProps({ user: { type: Object, default: null } })
 defineEmits(['logout', 'profile-updated'])
 
 const roleLabel = computed(() => ({ student: '学生', teacher: '教师', admin: '管理员' }[props.user?.role] || '学生'))
+const canEditGraph = computed(() => props.user?.role === 'teacher' || props.user?.role === 'admin')
+
+const NAV_DEFS = {
+  graph: { key: 'graph', icon: 'KG', label: '知识图谱', hint: '全局关系视图' },
+  browse: { key: 'browse', icon: 'BR', label: '知识浏览', hint: '搜索与筛选节点' },
+  qa: { key: 'qa', icon: 'AI', label: 'AI 问答', hint: '结合图谱上下文答疑' },
+  path: { key: 'path', icon: 'PT', label: '学习路径', hint: '推荐补习路线' },
+  errors: { key: 'errors', icon: 'ER', label: '错题本', hint: '错题溯源分析' },
+  paper: { key: 'paper', icon: 'EX', label: '智能组卷', hint: '薄弱点专项训练' },
+  resources: { key: 'resources', icon: 'RS', label: '资源库', hint: '资源管理与批量挂载' },
+  manage: { key: 'manage', icon: 'MG', label: '知识管理', hint: '维护节点与关系' },
+  admin: { key: 'admin', icon: 'AD', label: '数据看板', hint: '平台与知识库运营' },
+  profile: { key: 'profile', icon: 'ME', label: '个人中心', hint: '资料编辑与学习概览' },
+}
+
+const ROLE_NAV_KEYS = {
+  student: ['graph', 'browse', 'qa', 'path', 'errors', 'paper', 'profile'],
+  teacher: ['graph', 'browse', 'qa', 'resources', 'manage', 'profile'],
+  admin: ['graph', 'browse', 'resources', 'manage', 'admin', 'profile'],
+}
 
 const navItems = computed(() => {
-  const items = [
-    { key: 'graph', icon: 'KG', label: '知识图谱', hint: '全局关系视图' },
-    { key: 'browse', icon: 'BR', label: '知识浏览', hint: '搜索与筛选节点' },
-    { key: 'qa', icon: 'AI', label: 'AI 问答', hint: '结合图谱上下文答疑' },
-    { key: 'path', icon: 'PT', label: '学习路径', hint: '推荐补习路线' },
-    { key: 'errors', icon: 'ER', label: '错题本', hint: '错题溯源分析' },
-    { key: 'paper', icon: 'EX', label: '智能组卷', hint: '薄弱点专项训练' },
-    { key: 'profile', icon: 'ME', label: '个人中心', hint: '资料编辑与学习概览' },
-  ]
-  if (props.user?.role === 'admin') {
-    items.push({ key: 'admin', icon: 'AD', label: '数据看板', hint: '平台与知识库运营' })
-  }
-  if (props.user?.role === 'teacher' || props.user?.role === 'admin') {
-    items.push({ key: 'manage', icon: 'MG', label: '知识管理', hint: '维护节点与关系' })
-  }
-  return items
+  const role = props.user?.role || 'student'
+  return (ROLE_NAV_KEYS[role] || ROLE_NAV_KEYS.student).map(key => NAV_DEFS[key]).filter(Boolean)
 })
 
-const currentNavLabel = computed(() => navItems.value.find(n => n.key === activeNav.value)?.label || '')
-const currentNavHint = computed(() => navItems.value.find(n => n.key === activeNav.value)?.hint || '')
+const currentNav = computed(() => navItems.value.find(n => n.key === activeNav.value) || NAV_DEFS.graph)
+const currentNavLabel = computed(() => currentNav.value.label)
+const currentNavHint = computed(() => currentNav.value.hint)
 
 const graphRef = ref(null)
 const pathRecommendRef = ref(null)
@@ -333,6 +394,7 @@ const links = ref([])
 const categories = ref([])
 const selectedCategory = ref('')
 const selectedNode = ref(null)
+const selectedLink = ref(null)
 const highlightedPath = ref([])
 const searchNodeId = ref(null)
 const courses = ref([])
@@ -344,6 +406,13 @@ const heatmapData = ref([])
 const heatmapMode = ref(false)
 const masteredIds = ref([])
 const focusedNode = ref(null)
+const graphEditMode = ref(false)
+const graphPositions = ref({})
+const relationSourceId = ref('')
+const relationDraftType = ref('PREREQUISITE')
+const relationDraftWeight = ref(1)
+const batchMode = ref(false)
+const batchSelectedIds = ref([])
 const form = ref({ name: '', category: '', difficulty: 1, estimated_time: 0, description: '' })
 const relSource = ref('')
 const relTarget = ref('')
@@ -362,8 +431,64 @@ function getColor(cat) {
   return palette[hash]
 }
 
+function normalizeId(value) {
+  return typeof value === 'object' ? value?.id || '' : value || ''
+}
+
+function relationKey(link) {
+  if (!link) return ''
+  return `${normalizeId(link.source)}->${normalizeId(link.target)}:${link.type || 'RELATED_TO'}`
+}
+
+function positionStorageKey() {
+  return `kg:positions:${currentCourseId.value || 'global'}`
+}
+
+function loadGraphPositions() {
+  try {
+    graphPositions.value = JSON.parse(localStorage.getItem(positionStorageKey()) || '{}')
+  } catch {
+    graphPositions.value = {}
+  }
+}
+
+function saveGraphPositions() {
+  localStorage.setItem(positionStorageKey(), JSON.stringify(graphPositions.value))
+}
+
+function toggleGraphEdit(force) {
+  if (!canEditGraph.value) return
+  graphEditMode.value = typeof force === 'boolean' ? force : !graphEditMode.value
+  activeNav.value = 'graph'
+  if (!graphEditMode.value) {
+    selectedLink.value = null
+    relationSourceId.value = ''
+    batchMode.value = false
+    batchSelectedIds.value = []
+  }
+}
+
+function onNodePositionChange(position) {
+  graphPositions.value = {
+    ...graphPositions.value,
+    [position.id]: {
+      x: Math.round(position.x),
+      y: Math.round(position.y),
+    },
+  }
+  saveGraphPositions()
+}
+
+function isNavAllowed(key) {
+  return navItems.value.some(item => item.key === key)
+}
+
+function switchNav(key) {
+  activeNav.value = isNavAllowed(key) ? key : 'graph'
+}
+
 function onNavClick(key) {
-  activeNav.value = activeNav.value === key && key !== 'graph' ? 'graph' : key
+  switchNav(activeNav.value === key && key !== 'graph' ? 'graph' : key)
 }
 
 async function selectCourse(courseId) {
@@ -436,8 +561,12 @@ async function fetchMastery() {
 
 async function onCourseChange() {
   selectedNode.value = null
+  selectedLink.value = null
+  relationSourceId.value = ''
+  batchSelectedIds.value = []
   highlightedPath.value = []
   selectedCategory.value = ''
+  loadGraphPositions()
   await fetchGraph()
   await fetchCategories()
   await fetchMastery()
@@ -467,13 +596,47 @@ async function fetchHeatmap() {
   }
 }
 
-function onSelectNode(node) {
+async function onSelectNode(node, meta = {}) {
+  if (graphEditMode.value && relationSourceId.value && relationSourceId.value !== node.id) {
+    const sourceId = relationSourceId.value
+    const type = relationDraftType.value || 'PREREQUISITE'
+    const weight = Number(relationDraftWeight.value || 1)
+    const created = await createRelationByIds(sourceId, node.id, type, weight)
+    if (!created) return
+    relationSourceId.value = ''
+    selectedLink.value = {
+      source: sourceId,
+      target: node.id,
+      type,
+      weight,
+      key: `${sourceId}->${node.id}:${type}`,
+    }
+    return
+  }
+
+  if (graphEditMode.value && (batchMode.value || meta.additive)) {
+    const set = new Set(batchSelectedIds.value)
+    if (set.has(node.id)) set.delete(node.id)
+    else set.add(node.id)
+    batchSelectedIds.value = [...set]
+  }
+
   selectedNode.value = node
+  selectedLink.value = null
+  searchNodeId.value = null
+}
+
+function onSelectLink(link) {
+  if (!canEditGraph.value) return
+  graphEditMode.value = true
+  selectedLink.value = { ...link, key: link.key || relationKey(link) }
+  selectedNode.value = null
   searchNodeId.value = null
 }
 
 async function onLocateNode(node) {
   selectedNode.value = node
+  selectedLink.value = null
   searchNodeId.value = node.id
   activeNav.value = 'graph'
   await nextTick()
@@ -494,7 +657,8 @@ function onPathFound(pathNodes) {
 }
 
 async function onShowRoadmap(targetId) {
-  activeNav.value = 'path'
+  if (!isNavAllowed('path')) return
+  switchNav('path')
   await nextTick()
   if (pathRecommendRef.value) pathRecommendRef.value.fetchPath(targetId)
 }
@@ -504,8 +668,9 @@ function onClearPath() {
 }
 
 function onAskAI(node) {
+  if (!isNavAllowed('qa')) return
   focusedNode.value = node
-  activeNav.value = 'qa'
+  switchNav('qa')
 }
 
 function onClearFocus() {
@@ -522,6 +687,132 @@ function zoomIn() {
 
 function zoomOut() {
   if (graphRef.value?.zoomBy) graphRef.value.zoomBy(0.86)
+}
+
+async function onSaveNode(node, payload) {
+  if (!node?.id) return
+  try {
+    const updated = await knowledgeApi.update(node.id, payload)
+    nodes.value = nodes.value.map(n => n.id === updated.id ? updated : n)
+    selectedNode.value = updated
+    await fetchCategories()
+  } catch {
+    alert('保存知识点失败')
+  }
+}
+
+function onStartRelation(nodeId) {
+  relationSourceId.value = nodeId
+  selectedLink.value = null
+  activeNav.value = 'graph'
+}
+
+function onCancelRelation() {
+  relationSourceId.value = ''
+}
+
+function onUpdateRelationDraft(payload) {
+  relationDraftType.value = payload.type || 'PREREQUISITE'
+  relationDraftWeight.value = Number(payload.weight || 1)
+}
+
+async function createRelationByIds(source, target, type = 'PREREQUISITE', weight = 1) {
+  try {
+    await graphApi.createRelation(source, target, type, weight)
+    await fetchGraph()
+    return true
+  } catch {
+    alert('建立关系失败')
+    return false
+  }
+}
+
+async function onCreateRelationFromEditor(payload) {
+  const created = await createRelationByIds(payload.source, payload.target, payload.type, payload.weight)
+  if (!created) return
+  relationSourceId.value = ''
+  selectedLink.value = {
+    source: payload.source,
+    target: payload.target,
+    type: payload.type,
+    weight: payload.weight,
+    key: `${payload.source}->${payload.target}:${payload.type}`,
+  }
+}
+
+async function onSaveLink(link, payload) {
+  if (!link) return
+  try {
+    const updated = await graphApi.updateRelation(
+      normalizeId(link.source),
+      normalizeId(link.target),
+      link.type,
+      payload.source,
+      payload.target,
+      payload.type,
+      payload.weight,
+    )
+    await fetchGraph()
+    selectedLink.value = { ...updated, key: relationKey(updated) }
+  } catch {
+    alert('保存关系失败')
+  }
+}
+
+async function onDeleteLink(link) {
+  if (!link || !confirm('确认删除该关系？')) return
+  try {
+    await graphApi.deleteRelation(normalizeId(link.source), normalizeId(link.target), link.type)
+    selectedLink.value = null
+    await fetchGraph()
+  } catch {
+    alert('删除关系失败')
+  }
+}
+
+function toggleBatchMode() {
+  batchMode.value = !batchMode.value
+}
+
+function clearBatchSelection() {
+  batchSelectedIds.value = []
+}
+
+async function onBatchUpdate(payload) {
+  if (!batchSelectedIds.value.length || !Object.keys(payload).length) return
+  try {
+    await Promise.all(batchSelectedIds.value.map(id => knowledgeApi.update(id, payload)))
+    await fetchGraph()
+    await fetchCategories()
+  } catch {
+    alert('批量更新失败')
+  }
+}
+
+async function onBatchDelete() {
+  if (!batchSelectedIds.value.length || !confirm('确认批量删除选中的知识点？')) return
+  try {
+    await Promise.all(batchSelectedIds.value.map(id => knowledgeApi.delete(id)))
+    if (selectedNode.value && batchSelectedIds.value.includes(selectedNode.value.id)) selectedNode.value = null
+    batchSelectedIds.value = []
+    await fetchGraph()
+    await fetchCategories()
+  } catch {
+    alert('批量删除失败')
+  }
+}
+
+async function onCreateNodeFromEditor(payload) {
+  if (currentCourseId.value) payload.course_id = currentCourseId.value
+  try {
+    const created = await knowledgeApi.create(payload)
+    selectedNode.value = created
+    selectedLink.value = null
+    await fetchGraph()
+    await fetchCategories()
+  } catch {
+    alert('创建知识点失败')
+  }
 }
 
 async function onCreateNode() {
@@ -543,11 +834,15 @@ async function onCreateNode() {
   }
 }
 
-async function onDeleteNode() {
-  if (!selectedNode.value || !confirm('确认删除：' + selectedNode.value.name + '？')) return
+async function onDeleteNode(node = selectedNode.value) {
+  if (!node || !confirm('确认删除：' + node.name + '？')) return
   try {
-    await knowledgeApi.delete(selectedNode.value.id)
+    await knowledgeApi.delete(node.id)
+    delete graphPositions.value[node.id]
+    saveGraphPositions()
     selectedNode.value = null
+    selectedLink.value = null
+    batchSelectedIds.value = batchSelectedIds.value.filter(id => id !== node.id)
     await fetchGraph()
     await fetchCategories()
   } catch {
@@ -558,6 +853,13 @@ async function onDeleteNode() {
 async function onCreateRelation() {
   try {
     await graphApi.createRelation(relSource.value, relTarget.value, relType.value, 1.0)
+    selectedLink.value = {
+      source: relSource.value,
+      target: relTarget.value,
+      type: relType.value,
+      weight: 1,
+      key: `${relSource.value}->${relTarget.value}:${relType.value}`,
+    }
     await fetchGraph()
   } catch {
     alert('建立关系失败')

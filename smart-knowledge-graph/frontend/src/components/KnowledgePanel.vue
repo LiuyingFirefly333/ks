@@ -38,7 +38,32 @@
         </div>
       </div>
 
-      <div class="field" v-if="node.video_urls && node.video_urls.length">
+      <div class="field" v-if="resources.length">
+        <div class="section-title">学习资源 <span>{{ resources.length }}</span></div>
+        <div v-for="resource in resources" :key="resource.id" class="resource-item">
+          <div v-if="resource.type === 'video' && isBilibili(resource.url)" class="video-embed">
+            <iframe :src="bilibiliEmbed(resource.url)" frameborder="0" scrolling="no" allowfullscreen></iframe>
+          </div>
+          <div v-else-if="resource.type === 'video' && isYoutube(resource.url)" class="video-embed">
+            <iframe
+              :src="youtubeEmbed(resource.url)"
+              frameborder="0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowfullscreen
+            ></iframe>
+          </div>
+          <a v-else-if="resource.url" :href="resource.url" target="_blank" class="resource-link">
+            {{ resourceTypeLabel(resource.type) }} · {{ resource.title }}
+          </a>
+          <div v-else class="resource-inline">
+            <span class="cat-tag">{{ resourceTypeLabel(resource.type) }}</span>
+            <b>{{ resource.title }}</b>
+            <small v-if="resource.description">{{ resource.description }}</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="field" v-if="!resources.length && node.video_urls && node.video_urls.length">
         <div class="section-title">视频资源 <span>{{ node.video_urls.length }}</span></div>
         <div v-for="(url, idx) in node.video_urls" :key="'v' + idx" class="resource-item">
           <div v-if="isBilibili(url)" class="video-embed">
@@ -56,7 +81,7 @@
         </div>
       </div>
 
-      <div class="field" v-if="node.exercises && node.exercises.length">
+      <div class="field" v-if="!resources.length && node.exercises && node.exercises.length">
         <div class="section-title">习题资源 <span>{{ node.exercises.length }}</span></div>
         <div v-for="(url, idx) in node.exercises" :key="'e' + idx" class="resource-item">
           <a :href="url" target="_blank" class="resource-link exercise-link">打开习题 {{ idx + 1 }}</a>
@@ -88,7 +113,7 @@
 
 <script setup>
 import { ref, watch } from 'vue'
-import { graphApi } from '../api/index.js'
+import { graphApi, resourceApi } from '../api/index.js'
 import DiscussPanel from './DiscussPanel.vue'
 
 const props = defineProps({
@@ -100,6 +125,7 @@ const props = defineProps({
 defineEmits(['close', 'locate', 'show-roadmap', 'ask-ai'])
 
 const neighbors = ref([])
+const resources = ref([])
 
 watch(() => props.node, async (val) => {
   if (val && val.id) {
@@ -108,13 +134,31 @@ watch(() => props.node, async (val) => {
     } catch {
       neighbors.value = []
     }
+    try {
+      resources.value = await resourceApi.listByKnowledge(val.id, { status: 'published' })
+    } catch {
+      resources.value = []
+    }
   } else {
     neighbors.value = []
+    resources.value = []
   }
 }, { immediate: true })
 
 function relationLabel(type) {
   return type === 'PREREQUISITE' ? '前置' : type === 'RELATED_TO' ? '相关' : '关联'
+}
+
+function resourceTypeLabel(type) {
+  return {
+    video: '视频',
+    exercise: '练习',
+    article: '文章',
+    quiz: '测验',
+    document: '文档',
+    link: '链接',
+    ai_prompt: 'AI 提示',
+  }[type] || '资源'
 }
 
 function isBilibili(url) {
