@@ -102,6 +102,7 @@
             :nodes="nodes"
             :links="links"
             :highlightedPath="highlightedPath"
+            :highlightedPaths="highlightedPaths"
             :searchNodeId="searchNodeId"
             :selectedNodeId="selectedNode?.id"
             :masteryMap="masteryMap"
@@ -113,9 +114,13 @@
             :selectedNodeIds="batchSelectedIds"
             :relationSourceId="relationSourceId"
             :nodePositions="graphPositions"
+            :viewportTransform="currentGraphViewport"
+            :initialLayoutMode="currentGraphLayoutMode"
             @select-node="onSelectNode"
             @select-link="onSelectLink"
             @node-position-change="onNodePositionChange"
+            @viewport-change="onGraphViewportChange"
+            @layout-change="onGraphLayoutChange"
           />
           <div v-if="!currentCourseId" class="graph-empty">
             <div class="empty-kicker">等待课程</div>
@@ -133,7 +138,6 @@
           >
             {{ graphEditMode ? '完成' : '编辑' }}
           </button>
-          <button title="适应画布" @click="fitGraph">适应</button>
           <button title="放大" @click="zoomIn">+</button>
           <button title="缩小" @click="zoomOut">-</button>
         </div>
@@ -144,7 +148,9 @@
           <div class="legend-row"><span class="ldot" style="background:#16a34a"></span>熟练</div>
           <div class="legend-row"><span class="ldot" style="background:#f59e0b"></span>一般</div>
           <div class="legend-row"><span class="ldot" style="background:#f97316"></span>薄弱</div>
-          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#ef4444"></span>推荐路径</div>
+          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#ef4444"></span>最短路径</div>
+          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#16a34a"></span>最轻松</div>
+          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#2563eb"></span>最扎实</div>
           <div class="legend-row"><span style="display:inline-block;width:18px;height:0;border-top:2px dashed #94a3b8"></span>相关概念</div>
         </div>
 
@@ -372,9 +378,9 @@ const NAV_DEFS = {
 }
 
 const ROLE_NAV_KEYS = {
-  student: ['graph', 'browse', 'qa', 'path', 'errors', 'paper', 'profile'],
-  teacher: ['graph', 'browse', 'qa', 'resources', 'manage', 'profile'],
-  admin: ['graph', 'browse', 'resources', 'manage', 'admin', 'profile'],
+  student: ['graph', 'browse', 'qa', 'path', 'errors', 'paper'],
+  teacher: ['graph', 'browse', 'qa', 'resources', 'manage'],
+  admin: ['graph', 'browse', 'resources', 'manage', 'admin'],
 }
 
 const navItems = computed(() => {
@@ -382,7 +388,7 @@ const navItems = computed(() => {
   return (ROLE_NAV_KEYS[role] || ROLE_NAV_KEYS.student).map(key => NAV_DEFS[key]).filter(Boolean)
 })
 
-const currentNav = computed(() => navItems.value.find(n => n.key === activeNav.value) || NAV_DEFS.graph)
+const currentNav = computed(() => NAV_DEFS[activeNav.value] || NAV_DEFS.graph)
 const currentNavLabel = computed(() => currentNav.value.label)
 const currentNavHint = computed(() => currentNav.value.hint)
 
@@ -396,6 +402,7 @@ const selectedCategory = ref('')
 const selectedNode = ref(null)
 const selectedLink = ref(null)
 const highlightedPath = ref([])
+const highlightedPaths = ref([])
 const searchNodeId = ref(null)
 const courses = ref([])
 const currentCourseId = ref('')
@@ -408,6 +415,8 @@ const masteredIds = ref([])
 const focusedNode = ref(null)
 const graphEditMode = ref(false)
 const graphPositions = ref({})
+const graphViewports = ref({})
+const graphLayoutModes = ref({})
 const relationSourceId = ref('')
 const relationDraftType = ref('PREREQUISITE')
 const relationDraftWeight = ref(1)
@@ -417,6 +426,8 @@ const form = ref({ name: '', category: '', difficulty: 1, estimated_time: 0, des
 const relSource = ref('')
 const relTarget = ref('')
 const relType = ref('PREREQUISITE')
+const currentGraphViewport = computed(() => graphViewports.value[currentCourseId.value || 'global'] || null)
+const currentGraphLayoutMode = computed(() => graphLayoutModes.value[currentCourseId.value || 'global'] || 'dagre')
 
 function displayCategory(cat) {
   if (!cat) return '未分类'
@@ -456,6 +467,46 @@ function saveGraphPositions() {
   localStorage.setItem(positionStorageKey(), JSON.stringify(graphPositions.value))
 }
 
+function viewportStorageKey() {
+  return currentCourseId.value || 'global'
+}
+
+function recordGraphViewport() {
+  const viewport = graphRef.value?.getViewport?.()
+  if (viewport) onGraphViewportChange(viewport)
+}
+
+function onGraphViewportChange(viewport) {
+  if (!viewport) return
+  const x = Number(viewport.x)
+  const y = Number(viewport.y)
+  const k = Number(viewport.k)
+  if (![x, y, k].every(Number.isFinite)) return
+  const key = viewportStorageKey()
+  if (viewport.layoutMode) {
+    graphLayoutModes.value = {
+      ...graphLayoutModes.value,
+      [key]: viewport.layoutMode === 'force' ? 'force' : 'dagre',
+    }
+  }
+  graphViewports.value = {
+    ...graphViewports.value,
+    [key]: {
+      x,
+      y,
+      k,
+      layoutMode: viewport.layoutMode,
+    },
+  }
+}
+
+function onGraphLayoutChange(mode) {
+  const key = viewportStorageKey()
+  graphLayoutModes.value = { ...graphLayoutModes.value, [key]: mode === 'force' ? 'force' : 'dagre' }
+  const { [key]: _removed, ...rest } = graphViewports.value
+  graphViewports.value = rest
+}
+
 function toggleGraphEdit(force) {
   if (!canEditGraph.value) return
   graphEditMode.value = typeof force === 'boolean' ? force : !graphEditMode.value
@@ -480,11 +531,13 @@ function onNodePositionChange(position) {
 }
 
 function isNavAllowed(key) {
-  return navItems.value.some(item => item.key === key)
+  return key === 'profile' || navItems.value.some(item => item.key === key)
 }
 
 function switchNav(key) {
-  activeNav.value = isNavAllowed(key) ? key : 'graph'
+  const nextKey = isNavAllowed(key) ? key : 'graph'
+  if (activeNav.value === 'graph' && nextKey !== 'graph') recordGraphViewport()
+  activeNav.value = nextKey
 }
 
 function onNavClick(key) {
@@ -493,6 +546,7 @@ function onNavClick(key) {
 
 async function selectCourse(courseId) {
   if (currentCourseId.value === courseId) return
+  recordGraphViewport()
   currentCourseId.value = courseId
   await onCourseChange()
 }
@@ -565,6 +619,7 @@ async function onCourseChange() {
   relationSourceId.value = ''
   batchSelectedIds.value = []
   highlightedPath.value = []
+  highlightedPaths.value = []
   selectedCategory.value = ''
   loadGraphPositions()
   await fetchGraph()
@@ -652,8 +707,12 @@ function onLocateErrorNode(nodeId) {
   onLocateNodeId(nodeId)
 }
 
-function onPathFound(pathNodes) {
+function onPathFound(pathNodes, _totalTime, _type, pathGroups = []) {
   highlightedPath.value = pathNodes.map(n => n.id)
+  highlightedPaths.value = pathGroups.map(group => ({
+    ...group,
+    nodes: (group.path || []).map(node => node.id),
+  }))
 }
 
 async function onShowRoadmap(targetId) {
@@ -665,6 +724,7 @@ async function onShowRoadmap(targetId) {
 
 function onClearPath() {
   highlightedPath.value = []
+  highlightedPaths.value = []
 }
 
 function onAskAI(node) {
@@ -675,10 +735,6 @@ function onAskAI(node) {
 
 function onClearFocus() {
   focusedNode.value = null
-}
-
-function fitGraph() {
-  if (graphRef.value) graphRef.value.fitToScreen()
 }
 
 function zoomIn() {

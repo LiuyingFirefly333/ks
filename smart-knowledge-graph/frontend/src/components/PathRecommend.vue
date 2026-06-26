@@ -1,22 +1,38 @@
 <template>
   <div class="path-panel">
-    <div v-if="!tasks.length && !loading && !error" class="empty-state">
+    <div v-if="!hasAnyPath && !loading && !error" class="empty-state">
       选择一个目标知识点，系统会结合综合掌握度、前置依赖和资源自动生成学习任务。
     </div>
 
     <div v-if="loading" class="loading-spinner"></div>
     <div v-if="error" class="inline-error">{{ error }}</div>
+    <div v-if="compareNotice && hasAnyPath" class="inline-hint">{{ compareNotice }}</div>
 
-    <div v-if="tasks.length">
+    <div v-if="hasAnyPath">
       <div class="path-type-tabs">
         <button
           v-for="type in pathTypes"
           :key="type.key"
-          :class="{ active: currentType === type.key }"
+          :class="{ active: currentType === type.key, unavailable: !pathResults[type.key]?.path?.length }"
           :style="{ '--tab-color': type.color }"
+          :disabled="!pathResults[type.key]?.path?.length"
           @click="switchPath(type.key)"
         >
           {{ type.label }}
+        </button>
+      </div>
+
+      <div class="path-compare-summary">
+        <button
+          v-for="item in availablePathSummaries"
+          :key="item.key"
+          class="path-summary-item"
+          :class="{ active: currentType === item.key }"
+          @click="switchPath(item.key)"
+        >
+          <span class="path-color-dot" :style="{ background: item.color }"></span>
+          <b>{{ item.label }}</b>
+          <small>{{ item.count }} 点 · {{ item.totalTime }} 分钟</small>
         </button>
       </div>
 
@@ -88,7 +104,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import api, { recommendApi } from '../api/index.js'
 
 const emit = defineEmits(['locate', 'clear', 'path-found'])
@@ -104,59 +120,76 @@ const pathTypes = [
   { key: 'thorough', label: '最扎实', color: '#2563eb' },
 ]
 
-const pathResult = ref([])
-const tasks = ref([])
-const weakPrerequisites = ref([])
-const totalTime = ref(0)
-const completedCount = ref(0)
-const progress = ref(0)
+const pathResults = ref({})
 const loading = ref(false)
 const error = ref('')
+const compareNotice = ref('')
 const currentType = ref('shortest')
-const currentTypeColor = ref('#ef4444')
-const currentTypeLabel = ref('最短路径')
+const currentPath = computed(() => pathResults.value[currentType.value] || emptyPathPayload(currentType.value))
+const pathResult = computed(() => currentPath.value.path || [])
+const tasks = computed(() => currentPath.value.tasks || [])
+const weakPrerequisites = computed(() => currentPath.value.weak_prerequisites || [])
+const totalTime = computed(() => currentPath.value.total_estimated_time || 0)
+const completedCount = computed(() => currentPath.value.completed_count || 0)
+const progress = computed(() => currentPath.value.progress || 0)
+const currentTypeMeta = computed(() => pathTypes.find(item => item.key === currentType.value) || pathTypes[0])
+const currentTypeColor = computed(() => currentTypeMeta.value.color)
+const currentTypeLabel = computed(() => currentTypeMeta.value.label)
+const hasAnyPath = computed(() => pathTypes.some(type => pathResults.value[type.key]?.path?.length))
+const availablePathSummaries = computed(() => pathTypes
+  .map(type => {
+    const result = pathResults.value[type.key]
+    if (!result?.path?.length) return null
+    return {
+      key: type.key,
+      label: type.label,
+      color: type.color,
+      count: result.path.length,
+      totalTime: result.total_estimated_time || 0,
+    }
+  })
+  .filter(Boolean))
 
 function switchPath(type) {
+  if (!pathResults.value[type]?.path?.length) return
   currentType.value = type
-  const selectedType = pathTypes.find(item => item.key === type)
-  currentTypeColor.value = selectedType?.color || '#ef4444'
-  currentTypeLabel.value = selectedType?.label || '最短路径'
-  if (props.targetNode) fetchPath(props.targetNode.id)
 }
 
 async function fetchPath(targetId) {
   loading.value = true
   error.value = ''
-  pathResult.value = []
-  tasks.value = []
-  weakPrerequisites.value = []
-  totalTime.value = 0
-  completedCount.value = 0
-  progress.value = 0
+  compareNotice.value = ''
+  pathResults.value = {}
 
   try {
-    let data
-    if (currentType.value === 'easy') {
-      data = props.studentId
-        ? await recommendApi.recommendEasyPath(props.studentId, targetId)
-        : await apiPost('/recommend/path/easy', { mastered: fallbackMastered(), target: targetId })
-    } else if (currentType.value === 'thorough') {
-      data = props.studentId
-        ? await recommendApi.recommendThoroughPath(props.studentId, targetId)
-        : await apiPost('/recommend/path/thorough', { mastered: fallbackMastered(), target: targetId })
-    } else {
-      data = props.studentId
-        ? await recommendApi.recommendPathForStudent(props.studentId, targetId)
-        : await recommendApi.recommendPath(fallbackMastered(), targetId)
+    const settled = await Promise.allSettled(pathTypes.map(type => fetchPathByType(type.key, targetId)))
+    const nextResults = {}
+    let failedCount = 0
+
+    settled.forEach((item, index) => {
+      const type = pathTypes[index]
+      if (item.status === 'fulfilled' && item.value?.path?.length) {
+        nextResults[type.key] = normalizePathPayload(item.value, type.key)
+      } else {
+        failedCount += 1
+      }
+    })
+
+    if (!Object.keys(nextResults).length) {
+      const roadmap = await recommendApi.getRoadmap(targetId, props.studentId)
+      if (roadmap.path && roadmap.path.length) {
+        nextResults.shortest = normalizePathPayload(roadmap, 'shortest')
+      } else {
+        error.value = '未找到可行路径'
+      }
     }
 
-    if (data.path && data.path.length) {
-      applyPath(data)
-    } else {
-      const roadmap = await recommendApi.getRoadmap(targetId, props.studentId)
-      if (roadmap.path && roadmap.path.length) applyPath(roadmap)
-      else error.value = '未找到可行路径'
+    pathResults.value = nextResults
+    if (!pathResults.value[currentType.value]?.path?.length) {
+      currentType.value = availablePathSummaries.value[0]?.key || 'shortest'
     }
+    if (failedCount && hasAnyPath.value) compareNotice.value = '部分路径暂不可用，已展示可生成的推荐结果。'
+    emitPathResults()
   } catch (err) {
     error.value = err.normalizedMessage || '路径推荐失败，请检查后端连接'
   } finally {
@@ -168,9 +201,37 @@ function fallbackMastered() {
   return props.masteredIds.length ? props.masteredIds : ['n1', 'n2']
 }
 
-function applyPath(data) {
-  pathResult.value = data.path || []
-  tasks.value = data.tasks || pathResult.value.map((node, index) => ({
+async function fetchPathByType(type, targetId) {
+  if (type === 'easy') {
+    return props.studentId
+      ? recommendApi.recommendEasyPath(props.studentId, targetId)
+      : apiPost('/recommend/path/easy', { mastered: fallbackMastered(), target: targetId })
+  }
+  if (type === 'thorough') {
+    return props.studentId
+      ? recommendApi.recommendThoroughPath(props.studentId, targetId)
+      : apiPost('/recommend/path/thorough', { mastered: fallbackMastered(), target: targetId })
+  }
+  return props.studentId
+    ? recommendApi.recommendPathForStudent(props.studentId, targetId)
+    : recommendApi.recommendPath(fallbackMastered(), targetId)
+}
+
+function emptyPathPayload(type) {
+  return {
+    type,
+    path: [],
+    tasks: [],
+    weak_prerequisites: [],
+    total_estimated_time: 0,
+    completed_count: 0,
+    progress: 0,
+  }
+}
+
+function normalizePathPayload(data, type) {
+  const path = data.path || []
+  const normalizedTasks = data.tasks || path.map((node, index) => ({
     index: index + 1,
     node_id: node.id,
     name: node.name,
@@ -182,11 +243,33 @@ function applyPath(data) {
     status: 'pending',
     resources: [],
   }))
-  weakPrerequisites.value = data.weak_prerequisites || []
-  totalTime.value = data.total_estimated_time || 0
-  completedCount.value = data.completed_count || 0
-  progress.value = data.progress || 0
-  emit('path-found', pathResult.value, totalTime.value, currentType.value)
+  return {
+    ...data,
+    type,
+    path,
+    tasks: normalizedTasks,
+    weak_prerequisites: data.weak_prerequisites || [],
+    total_estimated_time: data.total_estimated_time || 0,
+    completed_count: data.completed_count || 0,
+    progress: data.progress || 0,
+  }
+}
+
+function emitPathResults() {
+  const highlightedPaths = pathTypes
+    .map(type => {
+      const result = pathResults.value[type.key]
+      if (!result?.path?.length) return null
+      return {
+        type: type.key,
+        label: type.label,
+        color: type.color,
+        path: result.path,
+        total_estimated_time: result.total_estimated_time || 0,
+      }
+    })
+    .filter(Boolean)
+  emit('path-found', pathResult.value, totalTime.value, currentType.value, highlightedPaths)
 }
 
 async function apiPost(url, body) {
@@ -195,13 +278,9 @@ async function apiPost(url, body) {
 }
 
 function doClear() {
-  pathResult.value = []
-  tasks.value = []
-  weakPrerequisites.value = []
+  pathResults.value = {}
   error.value = ''
-  totalTime.value = 0
-  completedCount.value = 0
-  progress.value = 0
+  compareNotice.value = ''
   emit('clear')
 }
 
