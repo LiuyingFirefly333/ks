@@ -20,7 +20,7 @@
   --shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
   --shadow-soft: 0 10px 28px rgba(15, 23, 42, 0.08);
   --topbar-h: 64px;
-  --sidenav-w: 240px;
+  --sidenav-w: 286px;
   --drawer-h: 360px;
   --transition: 0.18s ease;
 }
@@ -111,6 +111,28 @@ textarea { resize: vertical; }
 .topbar-center { flex: 1; display: flex; justify-content: center; align-items: center; gap: 10px; min-width: 0; }
 .topbar-select { width: 190px; background: var(--bg-soft); }
 .topbar-user { display: flex; align-items: center; gap: 10px; justify-content: flex-end; min-width: 240px; }
+.workspace-title {
+  align-items: flex-start;
+  justify-content: center;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 180px;
+  max-width: 420px;
+}
+.workspace-title span {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+.workspace-title small {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
 .user-role-badge {
   padding: 4px 9px;
   border-radius: 999px;
@@ -178,6 +200,91 @@ textarea { resize: vertical; }
   gap: 14px;
   min-height: 0;
 }
+.workspace-sidebar {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  padding: 14px;
+}
+.sidebar-section {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+.course-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-nav {
+  display: grid;
+  gap: 6px;
+}
+.sidebar-nav-item {
+  width: 100%;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px;
+  text-align: left;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.sidebar-nav-item:hover {
+  background: var(--bg-soft);
+  color: var(--primary);
+  border-color: #bfdbfe;
+  box-shadow: none;
+}
+.sidebar-nav-item.active {
+  background: #eff6ff;
+  color: var(--primary-dark);
+  border-color: #bfdbfe;
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+.sidebar-nav-icon {
+  width: 34px;
+  height: 32px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-muted);
+  color: var(--primary-dark);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+.sidebar-nav-item.active .sidebar-nav-icon {
+  background: var(--primary);
+  color: #fff;
+}
+.sidebar-nav-item b,
+.sidebar-nav-item small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-nav-item b {
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.2;
+}
+.sidebar-nav-item small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.sidebar-nav-item.active small { color: #3b82f6; }
 .course-sidebar-head {
   display: flex;
   align-items: center;
@@ -269,6 +376,60 @@ textarea { resize: vertical; }
 .sidebar-select { background: var(--bg-soft); }
 
 .main-content { flex: 1; position: relative; min-width: 0; overflow: hidden; }
+.workspace-main {
+  background: var(--bg-soft);
+}
+.workspace-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+}
+.workspace-page-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+.workspace-page-head h2 {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.2;
+}
+.workspace-page-head p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.workspace-page-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px;
+}
+.workspace-page-body > .chat-panel {
+  height: 100%;
+}
+.workspace-page-body > .path-panel,
+.workspace-page-body > .profile-center,
+.workspace-page-body > .admin-dashboard,
+.workspace-page-body > .manage-grid {
+  margin: 0 auto;
+  width: 100%;
+}
+.workspace-page-body > .path-panel,
+.workspace-page-body > .profile-center {
+  max-width: 1120px;
+}
 .graph-stage {
   width: 100%;
   height: 100%;
