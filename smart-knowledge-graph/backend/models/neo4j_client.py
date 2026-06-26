@@ -133,15 +133,25 @@ class Neo4jClient:
                 f"""
                 MATCH (a:KnowledgeNode {{id: $source}})
                 MATCH (b:KnowledgeNode {{id: $target}})
-                CREATE (a)-[r:{rel_type} {{weight: $weight}}]->(b)
-                RETURN r {{ .* }} as rel, a.name as source, b.name as target
+                MERGE (a)-[r:{rel_type}]->(b)
+                SET r.weight = $weight
+                RETURN r {{ .* }} as rel, type(r) as rel_type, a.name as source, b.name as target
                 """,
                 source=source_id,
                 target=target_id,
                 weight=weight,
             )
             record = result.single()
-            return {**(record["rel"] if record else {}), "source_name": record["source"], "target_name": record["target"]}
+            if not record:
+                return {}
+            return {
+                **(record["rel"] or {}),
+                "type": record["rel_type"],
+                "source": source_id,
+                "target": target_id,
+                "source_name": record["source"],
+                "target_name": record["target"],
+            }
 
     def delete_relation(self, source_id: str, target_id: str, rel_type: str) -> bool:
         with self.driver.session() as session:
@@ -156,6 +166,41 @@ class Neo4jClient:
             )
             return result.single()["deleted"] > 0
 
+    def update_relation(self, source_id: str, target_id: str, rel_type: str,
+                        new_source_id: str, new_target_id: str, new_rel_type: str,
+                        weight: float = 1.0) -> dict | None:
+        with self.driver.session() as session:
+            result = session.run(
+                f"""
+                MATCH (a:KnowledgeNode {{id: $source}})-[r:{rel_type}]->(b:KnowledgeNode {{id: $target}})
+                MATCH (new_a:KnowledgeNode {{id: $new_source}})
+                MATCH (new_b:KnowledgeNode {{id: $new_target}})
+                DELETE r
+                MERGE (new_a)-[new_r:{new_rel_type}]->(new_b)
+                SET new_r.weight = $weight
+                RETURN new_r {{ .* }} as rel,
+                       type(new_r) as rel_type,
+                       new_a.name as source,
+                       new_b.name as target
+                """,
+                source=source_id,
+                target=target_id,
+                new_source=new_source_id,
+                new_target=new_target_id,
+                weight=weight,
+            )
+            record = result.single()
+            if not record:
+                return None
+            return {
+                **(record["rel"] or {}),
+                "type": record["rel_type"],
+                "source": new_source_id,
+                "target": new_target_id,
+                "source_name": record["source"],
+                "target_name": record["target"],
+            }
+
     # ---- 图谱查询 ----
 
     def get_full_graph(self, category: str = None) -> dict:
@@ -164,9 +209,10 @@ class Neo4jClient:
             if category:
                 result = session.run(
                     """
-                    MATCH (n:KnowledgeNode {category: $category})-[r]-(m:KnowledgeNode {category: $category})
+                    MATCH (n:KnowledgeNode {category: $category})-[r]->(m:KnowledgeNode {category: $category})
                     RETURN n { .* } as source,
                            r { .* } as rel,
+                           type(r) as rel_type,
                            m { .* } as target
                     """,
                     category=category,
@@ -174,9 +220,10 @@ class Neo4jClient:
             else:
                 result = session.run(
                     """
-                    MATCH (n:KnowledgeNode)-[r]-(m:KnowledgeNode)
+                    MATCH (n:KnowledgeNode)-[r]->(m:KnowledgeNode)
                     RETURN n { .* } as source,
                            r { .* } as rel,
+                           type(r) as rel_type,
                            m { .* } as target
                     """
                 )
@@ -187,12 +234,13 @@ class Neo4jClient:
                 src = record["source"]
                 tgt = record["target"]
                 rel = record["rel"]
+                rel_type = record["rel_type"]
                 nodes_set[src["id"]] = src
                 nodes_set[tgt["id"]] = tgt
                 links.append({
                     "source": src["id"],
                     "target": tgt["id"],
-                    "type": rel.get("type", "RELATED_TO"),
+                    "type": rel_type,
                     "weight": rel.get("weight", 1.0),
                 })
 
@@ -459,10 +507,11 @@ class Neo4jClient:
                     """
                     MATCH (c:Course {id: $course_id})
                     MATCH (n:KnowledgeNode {category: $category})-[:BELONGS_TO]->(c)
-                    OPTIONAL MATCH (n)-[r]-(m:KnowledgeNode)
+                    OPTIONAL MATCH (n)-[r]->(m:KnowledgeNode)
                     WHERE (m)-[:BELONGS_TO]->(c)
                     RETURN n { .* } as source,
                            r { .* } as rel,
+                           type(r) as rel_type,
                            m { .* } as target
                     """,
                     course_id=course_id, category=category,
@@ -472,10 +521,11 @@ class Neo4jClient:
                     """
                     MATCH (c:Course {id: $course_id})
                     MATCH (n:KnowledgeNode)-[:BELONGS_TO]->(c)
-                    OPTIONAL MATCH (n)-[r]-(m:KnowledgeNode)
+                    OPTIONAL MATCH (n)-[r]->(m:KnowledgeNode)
                     WHERE (m)-[:BELONGS_TO]->(c)
                     RETURN n { .* } as source,
                            r { .* } as rel,
+                           type(r) as rel_type,
                            m { .* } as target
                     """,
                     course_id=course_id,
@@ -487,6 +537,7 @@ class Neo4jClient:
                 src = record["source"]
                 tgt = record["target"]
                 rel = record["rel"]
+                rel_type = record["rel_type"]
                 if src and src.get("id"):
                     nodes_set[src["id"]] = src
                 if tgt and tgt.get("id"):
@@ -495,7 +546,7 @@ class Neo4jClient:
                     links.append({
                         "source": src["id"],
                         "target": tgt["id"],
-                        "type": rel.get("type", "RELATED_TO"),
+                        "type": rel_type,
                         "weight": rel.get("weight", 1.0),
                     })
 
@@ -532,6 +583,391 @@ class Neo4jClient:
                 course_id=course_id, search_text=search_text,
             )
             return [r["node"] for r in result]
+
+    # ---- 学习资源库 ----
+
+    @staticmethod
+    def _resource_payload(record) -> dict:
+        resource = record["resource"]
+        try:
+            knowledge_nodes = record["knowledge_nodes"] or []
+        except KeyError:
+            knowledge_nodes = []
+        resource["knowledge_nodes"] = [n for n in knowledge_nodes if n and n.get("id")]
+        return resource
+
+    @staticmethod
+    def _legacy_resource_id(resource_type: str, url: str) -> str:
+        key = f"{resource_type}|{url}"
+        return "legacy-" + hashlib.sha1(key.encode("utf-8")).hexdigest()
+
+    def create_resource(self, data: dict) -> dict:
+        resource_id = data.get("id") or str(uuid.uuid4())
+        metadata_json = data.get("metadata_json")
+        if metadata_json is None:
+            metadata_json = json.dumps(data.get("metadata") or {}, ensure_ascii=False)
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                CREATE (r:LearningResource {
+                    id: $id,
+                    type: $type,
+                    title: $title,
+                    url: $url,
+                    description: $description,
+                    difficulty: $difficulty,
+                    estimated_time: $estimated_time,
+                    status: $status,
+                    source: $source,
+                    tags: $tags,
+                    metadata_json: $metadata_json,
+                    created_by: $created_by,
+                    created_at: datetime(),
+                    updated_at: datetime()
+                })
+                RETURN r { .* } as resource
+                """,
+                id=resource_id,
+                type=data.get("type", "link"),
+                title=data.get("title", ""),
+                url=data.get("url", ""),
+                description=data.get("description", ""),
+                difficulty=int(data.get("difficulty", 1) or 1),
+                estimated_time=int(data.get("estimated_time", 0) or 0),
+                status=data.get("status", "draft"),
+                source=data.get("source", ""),
+                tags=data.get("tags", []),
+                metadata_json=metadata_json,
+                created_by=data.get("created_by", ""),
+            )
+            resource = result.single()["resource"]
+            course_id = data.get("course_id")
+            if course_id:
+                session.run(
+                    """
+                    MATCH (r:LearningResource {id: $resource_id})
+                    MATCH (c:Course {id: $course_id})
+                    MERGE (r)-[:BELONGS_TO]->(c)
+                    """,
+                    resource_id=resource_id,
+                    course_id=course_id,
+                )
+            node_ids = data.get("node_ids") or []
+            if node_ids:
+                self.attach_resource_to_nodes(resource_id, node_ids)
+            return self.get_resource(resource_id) or resource
+
+    def get_resource(self, resource_id: str) -> dict | None:
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (r:LearningResource {id: $id})
+                OPTIONAL MATCH (r)-[:COVERS]->(n:KnowledgeNode)
+                RETURN r { .* } as resource,
+                       collect(DISTINCT n { .id, .name, .category }) as knowledge_nodes
+                """,
+                id=resource_id,
+            )
+            record = result.single()
+            return self._resource_payload(record) if record else None
+
+    def list_resources(
+        self,
+        course_id: str = None,
+        q: str = "",
+        resource_type: str = "",
+        status: str = "",
+        knowledge_id: str = "",
+    ) -> list[dict]:
+        matches = ["MATCH (r:LearningResource)"]
+        params = {
+            "course_id": course_id,
+            "q": q,
+            "resource_type": resource_type,
+            "status": status,
+            "knowledge_id": knowledge_id,
+        }
+        if course_id:
+            matches.append("MATCH (r)-[:BELONGS_TO]->(:Course {id: $course_id})")
+        if knowledge_id:
+            matches.append("MATCH (r)-[:COVERS]->(:KnowledgeNode {id: $knowledge_id})")
+        wheres = []
+        if q:
+            wheres.append(
+                "(r.title CONTAINS $q OR r.description CONTAINS $q OR r.url CONTAINS $q "
+                "OR any(tag IN coalesce(r.tags, []) WHERE tag CONTAINS $q))"
+            )
+        if resource_type:
+            wheres.append("r.type = $resource_type")
+        if status:
+            wheres.append("coalesce(r.status, 'draft') = $status")
+
+        query = "\n".join(matches)
+        if wheres:
+            query += "\nWHERE " + " AND ".join(wheres)
+        query += """
+        WITH DISTINCT r
+        OPTIONAL MATCH (r)-[:COVERS]->(n:KnowledgeNode)
+        WITH r, collect(DISTINCT n { .id, .name, .category }) as knowledge_nodes
+        ORDER BY coalesce(r.updated_at, r.created_at) DESC
+        RETURN r { .* } as resource,
+               knowledge_nodes
+        LIMIT 200
+        """
+        with self.driver.session() as session:
+            result = session.run(query, params)
+            return [self._resource_payload(record) for record in result]
+
+    def update_resource(self, resource_id: str, updates: dict) -> dict | None:
+        if not updates:
+            return self.get_resource(resource_id)
+        sets = ", ".join(f"r.{k} = ${k}" for k in updates)
+        params = {"id": resource_id, **updates}
+        with self.driver.session() as session:
+            result = session.run(
+                f"""
+                MATCH (r:LearningResource {{id: $id}})
+                SET {sets}, r.updated_at = datetime()
+                RETURN r {{ .* }} as resource
+                """,
+                params,
+            )
+            record = result.single()
+            return self.get_resource(resource_id) if record else None
+
+    def delete_resource(self, resource_id: str) -> bool:
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (r:LearningResource {id: $id})
+                DETACH DELETE r
+                RETURN count(r) as deleted
+                """,
+                id=resource_id,
+            )
+            record = result.single()
+            return bool(record and record["deleted"] > 0)
+
+    def attach_resource_to_nodes(
+        self,
+        resource_id: str,
+        node_ids: list[str],
+        weight: float = 1.0,
+        required: bool = False,
+    ) -> int:
+        clean_ids = [node_id for node_id in node_ids if node_id]
+        if not clean_ids:
+            return 0
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (r:LearningResource {id: $resource_id})
+                UNWIND $node_ids AS node_id
+                MATCH (n:KnowledgeNode {id: node_id})
+                MERGE (r)-[c:COVERS]->(n)
+                SET c.weight = $weight,
+                    c.required = $required,
+                    c.updated_at = datetime()
+                RETURN count(DISTINCT n) as attached
+                """,
+                resource_id=resource_id,
+                node_ids=clean_ids,
+                weight=float(weight or 1.0),
+                required=bool(required),
+            )
+            record = result.single()
+            return record["attached"] if record else 0
+
+    def detach_resource_from_node(self, resource_id: str, node_id: str) -> bool:
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (:LearningResource {id: $resource_id})-[c:COVERS]->(:KnowledgeNode {id: $node_id})
+                DELETE c
+                RETURN count(c) as detached
+                """,
+                resource_id=resource_id,
+                node_id=node_id,
+            )
+            record = result.single()
+            return bool(record and record["detached"] > 0)
+
+    def batch_attach_resources(
+        self,
+        resource_ids: list[str],
+        node_ids: list[str],
+        weight: float = 1.0,
+        required: bool = False,
+    ) -> int:
+        clean_resource_ids = [rid for rid in resource_ids if rid]
+        clean_node_ids = [nid for nid in node_ids if nid]
+        if not clean_resource_ids or not clean_node_ids:
+            return 0
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                UNWIND $resource_ids AS resource_id
+                MATCH (r:LearningResource {id: resource_id})
+                WITH collect(r) AS resources
+                UNWIND resources AS r
+                UNWIND $node_ids AS node_id
+                MATCH (n:KnowledgeNode {id: node_id})
+                MERGE (r)-[c:COVERS]->(n)
+                SET c.weight = $weight,
+                    c.required = $required,
+                    c.updated_at = datetime()
+                RETURN count(c) as attached
+                """,
+                resource_ids=clean_resource_ids,
+                node_ids=clean_node_ids,
+                weight=float(weight or 1.0),
+                required=bool(required),
+            )
+            record = result.single()
+            return record["attached"] if record else 0
+
+    def update_resources_status(self, resource_ids: list[str], status: str) -> int:
+        clean_ids = [rid for rid in resource_ids if rid]
+        if not clean_ids:
+            return 0
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                UNWIND $ids AS id
+                MATCH (r:LearningResource {id: id})
+                SET r.status = $status, r.updated_at = datetime()
+                RETURN count(r) as updated
+                """,
+                ids=clean_ids,
+                status=status,
+            )
+            record = result.single()
+            return record["updated"] if record else 0
+
+    def get_resources_for_nodes(self, node_ids: list[str], published_only: bool = True) -> dict[str, list[dict]]:
+        clean_ids = [node_id for node_id in node_ids if node_id]
+        if not clean_ids:
+            return {}
+        status_filter = "AND coalesce(r.status, 'draft') = 'published'" if published_only else ""
+        with self.driver.session() as session:
+            result = session.run(
+                f"""
+                UNWIND $node_ids AS node_id
+                MATCH (r:LearningResource)-[c:COVERS]->(n:KnowledgeNode {{id: node_id}})
+                WHERE true {status_filter}
+                WITH node_id, r, c
+                ORDER BY node_id, coalesce(c.order, 999), coalesce(r.type, ''), r.title
+                RETURN node_id,
+                       r {{ .* }} as resource,
+                       c {{ .* }} as cover
+                """,
+                node_ids=clean_ids,
+            )
+            grouped: dict[str, list[dict]] = {node_id: [] for node_id in clean_ids}
+            for record in result:
+                resource = record["resource"]
+                cover = record["cover"] or {}
+                resource["cover"] = cover
+                grouped.setdefault(record["node_id"], []).append(resource)
+            return grouped
+
+    def sync_node_legacy_resources(self, node_id: str, video_urls: list[str] = None, exercises: list[str] = None) -> int:
+        if video_urls is None or exercises is None:
+            node = self.get_node(node_id) or {}
+            video_urls = node.get("video_urls") or []
+            exercises = node.get("exercises") or []
+
+        rows = []
+        for index, url in enumerate(video_urls or [], 1):
+            rows.append({
+                "id": self._legacy_resource_id("video", url),
+                "source_key": f"legacy:video:{hashlib.sha1(url.encode('utf-8')).hexdigest()}",
+                "type": "video",
+                "title": f"微课视频 {index}",
+                "url": url,
+                "order": index,
+                "tags": ["legacy", "video"],
+            })
+        for index, url in enumerate(exercises or [], 1):
+            rows.append({
+                "id": self._legacy_resource_id("exercise", url),
+                "source_key": f"legacy:exercise:{hashlib.sha1(url.encode('utf-8')).hexdigest()}",
+                "type": "exercise",
+                "title": f"配套练习 {index}",
+                "url": url,
+                "order": index,
+                "tags": ["legacy", "exercise"],
+            })
+
+        with self.driver.session() as session:
+            session.run(
+                """
+                MATCH (r:LearningResource)-[c:COVERS]->(:KnowledgeNode {id: $node_id})
+                WHERE coalesce(r.legacy_source, false) = true
+                DELETE c
+                """,
+                node_id=node_id,
+            )
+            if not rows:
+                return 0
+            result = session.run(
+                """
+                MATCH (n:KnowledgeNode {id: $node_id})
+                OPTIONAL MATCH (n)-[:BELONGS_TO]->(course:Course)
+                UNWIND $rows AS row
+                MERGE (r:LearningResource {source_key: row.source_key})
+                ON CREATE SET
+                    r.id = row.id,
+                    r.type = row.type,
+                    r.title = row.title,
+                    r.url = row.url,
+                    r.description = '',
+                    r.difficulty = coalesce(n.difficulty, 1),
+                    r.estimated_time = 0,
+                    r.status = 'published',
+                    r.source = 'legacy_node_field',
+                    r.tags = row.tags,
+                    r.metadata_json = '{}',
+                    r.legacy_source = true,
+                    r.created_at = datetime()
+                SET r.updated_at = datetime()
+                FOREACH (_ IN CASE WHEN course IS NULL THEN [] ELSE [1] END |
+                    MERGE (r)-[:BELONGS_TO]->(course)
+                )
+                MERGE (r)-[c:COVERS]->(n)
+                SET c.order = row.order,
+                    c.weight = 1.0,
+                    c.required = false,
+                    c.updated_at = datetime()
+                RETURN count(DISTINCT r) as synced
+                """,
+                node_id=node_id,
+                rows=rows,
+            )
+            record = result.single()
+            return record["synced"] if record else 0
+
+    def migrate_legacy_resources(self, course_id: str = None) -> dict:
+        query = """
+        MATCH (n:KnowledgeNode)
+        WHERE size(coalesce(n.video_urls, [])) > 0 OR size(coalesce(n.exercises, [])) > 0
+        """
+        params = {"course_id": course_id}
+        if course_id:
+            query += "\nMATCH (n)-[:BELONGS_TO]->(:Course {id: $course_id})"
+        query += "\nRETURN n { .id, .video_urls, .exercises } as node"
+        synced_nodes = 0
+        synced_resources = 0
+        with self.driver.session() as session:
+            nodes = [record["node"] for record in session.run(query, params)]
+        for node in nodes:
+            synced_nodes += 1
+            synced_resources += self.sync_node_legacy_resources(
+                node["id"],
+                node.get("video_urls") or [],
+                node.get("exercises") or [],
+            )
+        return {"nodes": synced_nodes, "resources": synced_resources}
 
     def list_course_categories(self, course_id: str) -> list[str]:
         with self.driver.session() as session:
@@ -590,13 +1026,18 @@ class Neo4jClient:
                 WHERE NOT m.id IN $ids
                 RETURN DISTINCT m { .* } as node,
                        r { .* } as rel,
+                       type(r) as rel_type,
                        n.name as source_name
                 LIMIT 30
                 ''',
                 ids=node_ids,
             )
             return [
-                {"node": r["node"], "rel": r["rel"], "source_name": r["source_name"]}
+                {
+                    "node": r["node"],
+                    "rel": {**(r["rel"] or {}), "type": r["rel_type"]},
+                    "source_name": r["source_name"],
+                }
                 for r in result
             ]
 

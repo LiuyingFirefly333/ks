@@ -71,6 +71,8 @@ def create_knowledge():
         "course_id": data.get("course_id"),
     }
     node = db.create_node(node_data)
+    if node_data["video_urls"] or node_data["exercises"]:
+        db.sync_node_legacy_resources(node["id"], node_data["video_urls"], node_data["exercises"])
     audit("knowledge.create", "KnowledgeNode", node["id"], {"name": node["name"]})
     return jsonify(node), 201
 
@@ -88,6 +90,12 @@ def update_knowledge(node_id):
     node = db.update_node(node_id, updates)
     if not node:
         return legacy_fail("知识点不存在", 404, "KNOWLEDGE_NOT_FOUND")
+    if "video_urls" in updates or "exercises" in updates:
+        db.sync_node_legacy_resources(
+            node_id,
+            node.get("video_urls") or [],
+            node.get("exercises") or [],
+        )
     audit("knowledge.update", "KnowledgeNode", node_id, {"fields": sorted(updates.keys())})
     return jsonify(node)
 

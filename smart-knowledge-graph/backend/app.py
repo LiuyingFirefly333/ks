@@ -16,6 +16,7 @@ from routes.knowledge import bp as knowledge_bp
 from routes.qa import bp as qa_bp
 from routes.profile import bp as profile_bp
 from routes.recommend import bp as recommend_bp
+from routes.resources import bp as resources_bp
 
 
 class Neo4jJSONProvider(DefaultJSONProvider):
@@ -54,6 +55,7 @@ def create_app():
     app.register_blueprint(knowledge_bp)
     app.register_blueprint(graph_bp)
     app.register_blueprint(recommend_bp)
+    app.register_blueprint(resources_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(course_bp)
     app.register_blueprint(analytics_bp)

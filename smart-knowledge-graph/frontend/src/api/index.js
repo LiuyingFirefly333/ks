@@ -61,6 +61,25 @@ export const knowledgeApi = {
   delete: (id) => api.delete('/knowledge/' + id).then(r => r.data),
 }
 
+// Resources
+export const resourceApi = {
+  list: (params = {}) => api.get('/resources', { params }).then(r => r.data),
+  listByKnowledge: (nodeId, params = {}) =>
+    api.get('/resources/knowledge/' + nodeId, { params }).then(r => r.data),
+  get: (id) => api.get('/resources/' + id).then(r => r.data),
+  create: (data) => api.post('/resources', data).then(r => r.data),
+  update: (id, data) => api.put('/resources/' + id, data).then(r => r.data),
+  delete: (id) => api.delete('/resources/' + id).then(r => r.data),
+  attach: (id, data) => api.post('/resources/' + id + '/attach', data).then(r => r.data),
+  detach: (id, nodeId) => api.post('/resources/' + id + '/detach', { node_id: nodeId }).then(r => r.data),
+  batchAttach: (resourceIds, nodeIds, options = {}) =>
+    api.post('/resources/batch-attach', { resource_ids: resourceIds, node_ids: nodeIds, ...options }).then(r => r.data),
+  batchStatus: (resourceIds, status) =>
+    api.patch('/resources/batch-status', { resource_ids: resourceIds, status }).then(r => r.data),
+  migrateLegacy: (courseId) =>
+    api.post('/resources/migrate-legacy', { course_id: courseId }).then(r => r.data),
+}
+
 // Graph
 export const graphApi = {
   getGraph: (category, courseId, studentId) =>
@@ -68,6 +87,16 @@ export const graphApi = {
   getCategories: (courseId) => api.get('/graph/categories', { params: { course_id: courseId } }).then(r => r.data),
   createRelation: (source, target, type, weight) =>
     api.post('/graph/relations', { source, target, type, weight }).then(r => r.data),
+  updateRelation: (source, target, type, newSource, newTarget, newType, weight) =>
+    api.put('/graph/relations', {
+      source,
+      target,
+      type,
+      new_source: newSource,
+      new_target: newTarget,
+      new_type: newType,
+      weight,
+    }).then(r => r.data),
   deleteRelation: (source, target, type) =>
     api.delete('/graph/relations', { data: { source, target, type } }).then(r => r.data),
   getNeighbors: (nodeId) => api.get('/graph/neighbors', { params: { nodeId } }).then(r => r.data),

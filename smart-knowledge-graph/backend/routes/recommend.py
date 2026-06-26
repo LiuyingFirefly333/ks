@@ -22,17 +22,41 @@ def _estimated_time(node):
     return max(10, min(45, difficulty * 12))
 
 
+def _legacy_node_resources(node):
+    resources = []
+    for url in node.get("video_urls") or []:
+        resources.append({"type": "video", "title": "微课视频", "url": url})
+    for url in node.get("exercises") or []:
+        resources.append({"type": "exercise", "title": "配套练习", "url": url})
+    return resources
+
+
+def _task_resource_payload(resource):
+    return {
+        "id": resource.get("id"),
+        "type": resource.get("type", "link"),
+        "title": resource.get("title") or "学习资源",
+        "url": resource.get("url", ""),
+        "description": resource.get("description", ""),
+        "difficulty": resource.get("difficulty", 1),
+        "estimated_time": resource.get("estimated_time", 0),
+        "tags": resource.get("tags", []),
+    }
+
+
 def _build_tasks(path, mastery_map):
+    node_ids = [node.get("id") for node in path if node.get("id")]
+    resource_map = db.get_resources_for_nodes(node_ids)
     tasks = []
     for index, node in enumerate(path, 1):
         node_id = node.get("id")
         mastery = mastery_map.get(node_id, {"score": 0, "level": "unlearned"})
-        resources = []
-
-        for url in node.get("video_urls") or []:
-            resources.append({"type": "video", "title": "微课视频", "url": url})
-        for url in node.get("exercises") or []:
-            resources.append({"type": "exercise", "title": "配套练习", "url": url})
+        resources = [
+            _task_resource_payload(resource)
+            for resource in resource_map.get(node_id, [])
+        ]
+        if not resources:
+            resources = _legacy_node_resources(node)
 
         resources.append({
             "type": "ai",

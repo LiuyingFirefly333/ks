@@ -44,9 +44,15 @@ const props = defineProps({
   masteryMap: { type: Object, default: () => ({}) },
   heatmapData: { type: Array, default: () => [] },
   heatmapMode: { type: Boolean, default: false },
+  editable: { type: Boolean, default: false },
+  editMode: { type: Boolean, default: false },
+  selectedLinkKey: { type: String, default: '' },
+  selectedNodeIds: { type: Array, default: () => [] },
+  relationSourceId: { type: String, default: '' },
+  nodePositions: { type: Object, default: () => ({}) },
 })
 
-const emit = defineEmits(['select-node'])
+const emit = defineEmits(['select-node', 'select-link', 'node-position-change'])
 
 const container = ref(null)
 const svgEl = ref(null)
@@ -118,6 +124,8 @@ function getColor(node) {
 }
 
 function getNodeState(node) {
+  if (props.relationSourceId === node.id) return 'relation-source'
+  if (props.selectedNodeIds.includes(node.id)) return 'batch-selected'
   if (node.id === props.selectedNodeId) return 'selected'
   if (node.id === props.searchNodeId) return 'searched'
   if (isInPath(node.id)) return 'path'
@@ -140,6 +148,14 @@ function isPathLink(link, pathSet = pathEdgeSet()) {
   const source = normalizeId(link.source)
   const target = normalizeId(link.target)
   return pathSet.has(`${source}->${target}`)
+}
+
+function linkKey(link) {
+  return `${normalizeId(link.source)}->${normalizeId(link.target)}:${link.type || 'RELATED_TO'}`
+}
+
+function isSelectedLink(link) {
+  return props.selectedLinkKey && props.selectedLinkKey === linkKey(link)
 }
 
 function normalizeId(value) {
@@ -174,6 +190,23 @@ function buildGraphData() {
     .map(link => ({ ...link, source: normalizeId(link.source), target: normalizeId(link.target) }))
     .filter(link => nodeIds.has(link.source) && nodeIds.has(link.target))
   return { nodeData, linkData }
+}
+
+function applyStoredPositions(nodes) {
+  nodes.forEach(node => {
+    const saved = props.nodePositions?.[node.id]
+    if (!saved) return
+    const x = Number(saved.x)
+    const y = Number(saved.y)
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      node.x = x
+      node.y = y
+      if (props.editMode) {
+        node.fx = x
+        node.fy = y
+      }
+    }
+  })
 }
 
 function layoutWithDagre(nodes, links) {
@@ -289,19 +322,29 @@ async function initGraph() {
   } else {
     seedForceLayout(nodeData, linkData, width, height)
   }
+  applyStoredPositions(nodeData)
 
   const pathSet = pathEdgeSet()
   const links = linkLayer.selectAll('path')
-    .data(linkData)
+    .data(linkData, linkKey)
     .join('path')
-    .attr('class', d => `graph-link ${isPathLink(d, pathSet) ? 'is-path' : ''}`)
-    .attr('stroke', d => isPathLink(d, pathSet) ? '#ef4444' : (d.type === 'RELATED_TO' ? '#94a3b8' : '#64748b'))
-    .attr('stroke-width', d => isPathLink(d, pathSet) ? 3 : Math.max(1.4, (d.weight || 1) * 1.2))
+    .attr('class', d => `graph-link ${isPathLink(d, pathSet) ? 'is-path' : ''} ${isSelectedLink(d) ? 'is-selected' : ''}`)
+    .attr('cursor', props.editable ? 'pointer' : null)
+    .attr('stroke', d => {
+      if (isSelectedLink(d)) return '#0f172a'
+      return isPathLink(d, pathSet) ? '#ef4444' : (d.type === 'RELATED_TO' ? '#94a3b8' : '#64748b')
+    })
+    .attr('stroke-width', d => isSelectedLink(d) ? 4 : (isPathLink(d, pathSet) ? 3 : Math.max(1.4, (d.weight || 1) * 1.2)))
     .attr('stroke-opacity', d => isPathLink(d, pathSet) ? 0.95 : 0.42)
     .attr('stroke-dasharray', d => d.type === 'RELATED_TO' ? '6 5' : null)
     .attr('marker-end', d => {
       if (isPathLink(d, pathSet)) return 'url(#arrow-path)'
       return d.type === 'RELATED_TO' ? 'url(#arrow-related)' : 'url(#arrow-prerequisite)'
+    })
+    .on('click', (event, link) => {
+      if (!props.editable) return
+      event.stopPropagation()
+      emit('select-link', { ...link, key: linkKey(link) })
     })
 
   const edgeLabels = labelLayer.selectAll('text')
@@ -315,8 +358,11 @@ async function initGraph() {
     .data(nodeData)
     .join('g')
     .attr('class', d => `graph-node-card state-${getNodeState(d)}`)
-    .attr('cursor', 'pointer')
-    .on('click', (event, node) => emit('select-node', node))
+    .attr('cursor', props.editMode ? 'move' : 'pointer')
+    .on('click', (event, node) => {
+      if (event.defaultPrevented) return
+      emit('select-node', node, { additive: event.shiftKey || event.metaKey || event.ctrlKey })
+    })
 
   nodes.append('rect')
     .attr('x', -NODE_W / 2)
@@ -364,16 +410,19 @@ async function initGraph() {
   nodes.append('title')
     .text(d => `${d.name || d.id}\n${displayCategory(d.category)}\n难度 ${d.difficulty || 1}`)
 
+  if (props.editMode || layoutMode.value === 'force') {
+    nodes.call(createDragBehavior(links, nodes, edgeLabels, width, height))
+  }
+
   if (layoutMode.value === 'force') {
-    nodes.call(createDragBehavior())
     simulation = createForceSimulation(nodeData, linkData, width, height)
     simulation.on('tick', () => {
-      clampNodes(nodeData, width, height)
+      if (!props.editMode) clampNodes(nodeData, width, height)
       render(links, nodes, edgeLabels)
     })
 
     for (let i = 0; i < 130; i++) simulation.tick()
-    clampNodes(nodeData, width, height)
+    if (!props.editMode) clampNodes(nodeData, width, height)
     render(links, nodes, edgeLabels)
     simulation.alpha(0.18).restart()
     setTimeout(() => fitToScreen(), 260)
@@ -415,21 +464,32 @@ function createForceSimulation(nodes, links, width, height) {
     .alphaDecay(0.035)
 }
 
-function createDragBehavior() {
+function createDragBehavior(links, nodes, edgeLabels, width, height) {
   return d3.drag()
+    .container(() => g?.node() || svgEl.value)
     .on('start', (event, node) => {
       if (!event.active && simulation) simulation.alphaTarget(0.25).restart()
       node.fx = node.x
       node.fy = node.y
     })
     .on('drag', (event, node) => {
+      node.x = event.x
+      node.y = event.y
       node.fx = event.x
       node.fy = event.y
+      if (!props.editMode) clampNodes([node], width, height)
+      render(links, nodes, edgeLabels)
     })
     .on('end', (event, node) => {
       if (!event.active && simulation) simulation.alphaTarget(0)
-      node.fx = null
-      node.fy = null
+      if (props.editMode) {
+        node.fx = node.x
+        node.fy = node.y
+        emit('node-position-change', { id: node.id, x: node.x, y: node.y })
+      } else {
+        node.fx = null
+        node.fy = null
+      }
     })
 }
 
@@ -482,9 +542,12 @@ function updateVisualState() {
   const pathSet = pathEdgeSet()
 
   g.selectAll('.graph-link')
-    .attr('class', d => `graph-link ${isPathLink(d, pathSet) ? 'is-path' : ''}`)
-    .attr('stroke', d => isPathLink(d, pathSet) ? '#ef4444' : (d.type === 'RELATED_TO' ? '#94a3b8' : '#64748b'))
-    .attr('stroke-width', d => isPathLink(d, pathSet) ? 3 : Math.max(1.4, (d.weight || 1) * 1.2))
+    .attr('class', d => `graph-link ${isPathLink(d, pathSet) ? 'is-path' : ''} ${isSelectedLink(d) ? 'is-selected' : ''}`)
+    .attr('stroke', d => {
+      if (isSelectedLink(d)) return '#0f172a'
+      return isPathLink(d, pathSet) ? '#ef4444' : (d.type === 'RELATED_TO' ? '#94a3b8' : '#64748b')
+    })
+    .attr('stroke-width', d => isSelectedLink(d) ? 4 : (isPathLink(d, pathSet) ? 3 : Math.max(1.4, (d.weight || 1) * 1.2)))
     .attr('stroke-opacity', d => isPathLink(d, pathSet) ? 0.95 : 0.42)
     .attr('marker-end', d => {
       if (isPathLink(d, pathSet)) return 'url(#arrow-path)'
@@ -661,13 +724,13 @@ function scheduleInit() {
 }
 
 watch(
-  () => [props.nodes, props.links],
+  () => [props.nodes, props.links, props.editMode],
   scheduleInit,
   { deep: true },
 )
 
 watch(
-  () => [props.highlightedPath, props.masteryMap, props.heatmapData, props.heatmapMode, props.selectedNodeId, props.searchNodeId],
+  () => [props.highlightedPath, props.masteryMap, props.heatmapData, props.heatmapMode, props.selectedNodeId, props.searchNodeId, props.selectedLinkKey, props.selectedNodeIds, props.relationSourceId],
   () => nextTick(() => updateVisualState()),
   { deep: true },
 )
