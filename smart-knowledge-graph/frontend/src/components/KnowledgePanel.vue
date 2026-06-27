@@ -32,11 +32,45 @@
           <div class="value est-time">{{ node.estimated_time }} 分钟</div>
         </div>
 
-        <div class="field">
-          <div class="label">描述</div>
-          <div class="value muted-text">{{ node.description || '暂无描述' }}</div>
+      <div class="field">
+        <div class="label">描述</div>
+        <div class="value muted-text">{{ node.description || '暂无描述' }}</div>
+      </div>
+
+      <div v-if="canMarkMastery" class="mastery-mark-card">
+        <div class="section-title">我的掌握度 <span>{{ masteryScore }} 分</span></div>
+        <div class="mastery-mark-head">
+          <span class="mastery-level-pill" :class="'level-' + masteryLevel">{{ masteryLevelLabel }}</span>
+          <small v-if="node.mastery_score !== undefined">综合诊断 {{ node.mastery_score || 0 }} 分</small>
+        </div>
+        <input
+          v-model.number="masteryScore"
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          :disabled="savingMastery"
+        />
+        <div class="mastery-quick-actions">
+          <button
+            v-for="item in masteryPresets"
+            :key="item.score"
+            class="secondary"
+            :class="{ active: masteryScore === item.score }"
+            :disabled="savingMastery"
+            @click="setMasteryScore(item.score)"
+          >
+            {{ item.label }}
+          </button>
+        </div>
+        <div class="mastery-save-row">
+          <button @click="saveMastery" :disabled="savingMastery || !hasMasteryChanged">
+            {{ savingMastery ? '保存中...' : '保存掌握度' }}
+          </button>
+          <span v-if="masteryMessage">{{ masteryMessage }}</span>
         </div>
       </div>
+    </div>
 
       <div class="field" v-if="resources.length">
         <div class="section-title">学习资源 <span>{{ resources.length }}</span></div>
@@ -112,8 +146,8 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
-import { graphApi, resourceApi } from '../api/index.js'
+import { computed, ref, watch } from 'vue'
+import { graphApi, recommendApi, resourceApi } from '../api/index.js'
 import DiscussPanel from './DiscussPanel.vue'
 
 const props = defineProps({
@@ -122,13 +156,43 @@ const props = defineProps({
   userRole: { type: String, default: 'student' },
 })
 
-defineEmits(['close', 'locate', 'show-roadmap', 'ask-ai'])
+const emit = defineEmits(['close', 'locate', 'show-roadmap', 'ask-ai', 'mastery-updated'])
 
 const neighbors = ref([])
 const resources = ref([])
+const masteryScore = ref(0)
+const savedMasteryScore = ref(0)
+const savingMastery = ref(false)
+const masteryMessage = ref('')
+
+const masteryPresets = [
+  { label: '未学', score: 0 },
+  { label: '薄弱', score: 40 },
+  { label: '一般', score: 70 },
+  { label: '熟练', score: 90 },
+]
+
+const canMarkMastery = computed(() => props.userRole === 'student' && props.userId && props.node?.id)
+const hasMasteryChanged = computed(() => Number(masteryScore.value) !== Number(savedMasteryScore.value))
+const masteryLevel = computed(() => {
+  if (masteryScore.value >= 85) return 'proficient'
+  if (masteryScore.value >= 60) return 'fair'
+  if (masteryScore.value > 0) return 'weak'
+  return 'unlearned'
+})
+const masteryLevelLabel = computed(() => ({
+  proficient: '熟练',
+  fair: '一般',
+  weak: '薄弱',
+  unlearned: '未学习',
+}[masteryLevel.value]))
 
 watch(() => props.node, async (val) => {
   if (val && val.id) {
+    const initialScore = Number(val.manual_score ?? val.mastery_score ?? 0)
+    masteryScore.value = Number.isFinite(initialScore) ? initialScore : 0
+    savedMasteryScore.value = masteryScore.value
+    masteryMessage.value = ''
     try {
       neighbors.value = await graphApi.getNeighbors(val.id)
     } catch {
@@ -142,8 +206,33 @@ watch(() => props.node, async (val) => {
   } else {
     neighbors.value = []
     resources.value = []
+    masteryScore.value = 0
+    savedMasteryScore.value = 0
+    masteryMessage.value = ''
   }
 }, { immediate: true })
+
+function setMasteryScore(score) {
+  masteryScore.value = score
+}
+
+async function saveMastery() {
+  if (!canMarkMastery.value) return
+  savingMastery.value = true
+  masteryMessage.value = ''
+  try {
+    const score = Math.max(0, Math.min(100, Number(masteryScore.value) || 0))
+    await recommendApi.setMastery(props.userId, props.node.id, score)
+    savedMasteryScore.value = score
+    masteryScore.value = score
+    masteryMessage.value = '已更新'
+    emit('mastery-updated', { node_id: props.node.id, score })
+  } catch (err) {
+    masteryMessage.value = err.normalizedMessage || '保存失败'
+  } finally {
+    savingMastery.value = false
+  }
+}
 
 function relationLabel(type) {
   return type === 'PREREQUISITE' ? '前置' : type === 'RELATED_TO' ? '相关' : '关联'

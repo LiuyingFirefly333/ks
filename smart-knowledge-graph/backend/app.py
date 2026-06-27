@@ -1,4 +1,6 @@
-from flask import Flask
+from pathlib import Path
+
+from flask import Flask, send_from_directory
 from flask_cors import CORS
 from flask.json.provider import DefaultJSONProvider
 from neo4j.time import Date, DateTime, Time
@@ -17,6 +19,7 @@ from routes.qa import bp as qa_bp
 from routes.profile import bp as profile_bp
 from routes.recommend import bp as recommend_bp
 from routes.resources import bp as resources_bp
+from routes.teaching import bp as teaching_bp
 
 
 class Neo4jJSONProvider(DefaultJSONProvider):
@@ -65,6 +68,12 @@ def create_app():
     app.register_blueprint(discuss_bp)
     app.register_blueprint(qa_bp)
     app.register_blueprint(profile_bp)
+    app.register_blueprint(teaching_bp)
+
+    @app.route("/uploads/teaching/<path:filename>")
+    def teaching_upload(filename):
+        upload_dir = Path(__file__).resolve().parent / "uploads" / "teaching"
+        return send_from_directory(upload_dir, filename)
 
     @app.route("/api/health")
     def health():

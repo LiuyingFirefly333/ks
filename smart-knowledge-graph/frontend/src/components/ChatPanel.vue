@@ -100,6 +100,19 @@
           </select>
           <input v-model="feedbackForm.target_id" placeholder="目标ID，默认取第一个参考知识点" />
         </div>
+        <div v-if="feedbackForm.target_type === 'relation'" class="feedback-triple-grid">
+          <input v-model="feedbackForm.triple.source_id" placeholder="源知识点 ID" />
+          <select v-model="feedbackForm.triple.relation_type">
+            <option value="PREREQUISITE">PREREQUISITE</option>
+            <option value="RELATED_TO">RELATED_TO</option>
+          </select>
+          <input v-model="feedbackForm.triple.target_id" placeholder="目标知识点 ID" />
+          <select v-model="feedbackForm.triple.action">
+            <option value="upsert">新增/更新</option>
+            <option value="delete">删除</option>
+            <option value="replace">替换</option>
+          </select>
+        </div>
         <div class="form-actions">
           <button class="secondary" @click="feedbackTarget = null">取消</button>
           <button @click="submitFeedback" :disabled="!feedbackForm.correction.trim()">提交</button>
@@ -145,8 +158,18 @@ const streamingText = ref('')
 const sessionId = ref(null)
 const msgList = ref(null)
 const feedbackTarget = ref(null)
-const feedbackForm = ref({ correction: '', correct_description: '', target_type: 'node', target_id: '' })
+const feedbackForm = ref(emptyFeedbackForm())
 let searchTimer = null
+
+function emptyFeedbackForm() {
+  return {
+    correction: '',
+    correct_description: '',
+    target_type: 'node',
+    target_id: '',
+    triple: { source_id: '', relation_type: 'RELATED_TO', target_id: '', action: 'upsert' },
+  }
+}
 
 function normalizeRole(role) {
   return role === 'assistant' ? 'ai' : role
@@ -282,27 +305,58 @@ async function onSend() {
 
 function openFeedback(msg) {
   const firstSource = msg.sources?.[0]
+  const secondSource = msg.sources?.[1]
   feedbackTarget.value = msg
   feedbackForm.value = {
     correction: '',
     correct_description: '',
     target_type: 'node',
     target_id: firstSource?.id || '',
+    triple: {
+      source_id: firstSource?.id || '',
+      relation_type: 'RELATED_TO',
+      target_id: secondSource?.id || '',
+      action: 'upsert',
+    },
   }
 }
 
 async function submitFeedback() {
   if (!feedbackTarget.value || !sessionId.value) return
+  const entities = (feedbackTarget.value.sources || []).map(source => ({
+    id: source.id,
+    name: source.name,
+    category: source.category || '',
+    match_type: source.match_type || 'source',
+    confidence: source.confidence || 1,
+  }))
+  const triples = []
+  if (feedbackForm.value.target_type === 'relation') {
+    const triple = feedbackForm.value.triple || {}
+    if (triple.source_id && triple.target_id && triple.relation_type) {
+      triples.push({
+        source_id: triple.source_id,
+        target_id: triple.target_id,
+        relation_type: triple.relation_type,
+        action: triple.action || 'upsert',
+        note: feedbackForm.value.correct_description || feedbackForm.value.correction,
+      })
+    }
+  }
   await qaApi.submitFeedback({
     session_id: sessionId.value,
     message_id: feedbackTarget.value.id,
     correction: feedbackForm.value.correction,
     correct_description: feedbackForm.value.correct_description,
     target_type: feedbackForm.value.target_type,
-    target_id: feedbackForm.value.target_id,
+    target_id: feedbackForm.value.target_type === 'relation' && triples[0]
+      ? `${triples[0].source_id}|${triples[0].target_id}|${triples[0].relation_type}`
+      : feedbackForm.value.target_id,
+    entities,
+    triples,
   })
   feedbackTarget.value = null
-  feedbackForm.value = { correction: '', correct_description: '', target_type: 'node', target_id: '' }
+  feedbackForm.value = emptyFeedbackForm()
 }
 
 function scrollToBottom() {

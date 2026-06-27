@@ -1,4 +1,7 @@
-from flask import Blueprint, jsonify, request
+from io import BytesIO
+from xml.sax.saxutils import escape
+
+from flask import Blueprint, jsonify, request, send_file
 
 from models.neo4j_client import db
 from routes.security import (
@@ -62,3 +65,111 @@ def class_heatmap():
         return legacy_fail("无权访问该班级热力图", 403, "FORBIDDEN")
     result = db.get_class_heatmap(data["class_id"], data.get("course_id"))
     return jsonify(result)
+
+
+def _can_view_class(class_id):
+    return current_role() == "admin" or db.teacher_owns_class(current_user_id(), class_id)
+
+
+@bp.route("/class/<class_id>/report", methods=["GET"])
+@require_roles("teacher", "admin")
+def class_learning_report(class_id):
+    if not _can_view_class(class_id):
+        return legacy_fail("无权访问该班级报告", 403, "FORBIDDEN")
+    report = db.get_class_learning_report(class_id, request.args.get("course_id"))
+    if not report:
+        return legacy_fail("班级不存在", 404, "CLASS_NOT_FOUND")
+    return jsonify(report)
+
+
+@bp.route("/class/<class_id>/report/export", methods=["GET"])
+@require_roles("teacher", "admin")
+def export_class_learning_report(class_id):
+    if not _can_view_class(class_id):
+        return legacy_fail("无权导出该班级报告", 403, "FORBIDDEN")
+    report = db.get_class_learning_report(class_id, request.args.get("course_id"))
+    if not report:
+        return legacy_fail("班级不存在", 404, "CLASS_NOT_FOUND")
+
+    workbook = _spreadsheet_xml(report)
+    filename = f"{report['class'].get('name', 'class')}-学情报告.xls"
+    return send_file(
+        BytesIO(workbook.encode("utf-8")),
+        mimetype="application/vnd.ms-excel",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+def _cell(value, cell_type="String"):
+    if value is None:
+        value = ""
+    text = escape(str(value))
+    return f'<Cell><Data ss:Type="{cell_type}">{text}</Data></Cell>'
+
+
+def _row(values):
+    return "<Row>" + "".join(_cell(value, "Number" if isinstance(value, (int, float)) else "String") for value in values) + "</Row>"
+
+
+def _worksheet(name, rows):
+    return f'<Worksheet ss:Name="{escape(name)}"><Table>' + "".join(_row(row) for row in rows) + "</Table></Worksheet>"
+
+
+def _spreadsheet_xml(report):
+    summary = report.get("summary", {})
+    top_nodes = report.get("top_error_nodes", [])
+    students = report.get("student_error_stats", [])
+    suggestions = report.get("teaching_suggestions", [])
+
+    summary_rows = [
+        ["指标", "数值"],
+        ["班级", report.get("class", {}).get("name", "")],
+        ["学生数", summary.get("student_count", 0)],
+        ["错题总数", summary.get("total_errors", 0)],
+        ["涉及学生", summary.get("affected_students", 0)],
+        ["高频易错点", summary.get("high_frequency_nodes", 0)],
+        ["班级平均掌握度", summary.get("avg_class_score", 0)],
+    ]
+    node_rows = [["知识点", "分类", "错题数", "涉及学生", "平均掌握度", "薄弱人数", "样例题目"]]
+    node_rows.extend([
+        [
+            item.get("name", ""),
+            item.get("category", ""),
+            item.get("error_count", 0),
+            item.get("student_count", 0),
+            item.get("avg_score", 0),
+            item.get("weak_count", 0),
+            "；".join(item.get("sample_questions", [])),
+        ]
+        for item in top_nodes
+    ])
+    student_rows = [["学生", "邮箱", "错题数", "涉及知识点数"]]
+    student_rows.extend([
+        [item.get("name", ""), item.get("email", ""), item.get("error_count", 0), item.get("weak_node_count", 0)]
+        for item in students
+    ])
+    suggestion_rows = [["专题", "原因", "策略", "建议时长", "行动"]]
+    suggestion_rows.extend([
+        [
+            item.get("title", ""),
+            item.get("reason", ""),
+            item.get("strategy", ""),
+            item.get("suggested_minutes", 0),
+            "；".join(item.get("actions", [])),
+        ]
+        for item in suggestions
+    ])
+
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+""" + "".join([
+        _worksheet("报告概览", summary_rows),
+        _worksheet("高频易错点", node_rows),
+        _worksheet("学生错题统计", student_rows),
+        _worksheet("教学建议", suggestion_rows),
+    ]) + "</Workbook>"
