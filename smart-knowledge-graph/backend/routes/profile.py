@@ -1,4 +1,6 @@
-from flask import Blueprint, jsonify, request
+from io import BytesIO
+
+from flask import Blueprint, jsonify, request, send_file
 
 from models.neo4j_client import db
 from routes.security import audit, current_role, current_user_id, legacy_fail, require_roles
@@ -41,3 +43,44 @@ def update_profile():
 def get_profile_stats():
     stats = db.get_personal_stats(current_role(), current_user_id(), request.args.get("course_id"))
     return jsonify(stats)
+
+
+@bp.route("/growth", methods=["GET"])
+@require_roles("student")
+def get_growth_archive():
+    archive = db.get_growth_archive(
+        current_user_id(),
+        request.args.get("course_id"),
+        request.args.get("semester"),
+    )
+    return jsonify(archive)
+
+
+@bp.route("/growth/snapshot", methods=["POST"])
+@require_roles("student")
+def create_growth_snapshot():
+    data = request.json or {}
+    snapshot = db.create_learning_snapshot(
+        current_user_id(),
+        data.get("course_id"),
+        data.get("semester"),
+    )
+    audit("profile.growth.snapshot", "LearningSnapshot", snapshot["id"], {"student_id": current_user_id()})
+    return jsonify(snapshot), 201
+
+
+@bp.route("/growth/export", methods=["GET"])
+@require_roles("student")
+def export_growth_report():
+    archive = db.get_growth_archive(
+        current_user_id(),
+        request.args.get("course_id"),
+        request.args.get("semester"),
+    )
+    filename = f"{archive['semester']['label']}-个人成长报告.md"
+    return send_file(
+        BytesIO(archive["growth_report"].encode("utf-8")),
+        mimetype="text/markdown; charset=utf-8",
+        as_attachment=True,
+        download_name=filename,
+    )

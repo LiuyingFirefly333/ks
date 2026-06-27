@@ -173,6 +173,7 @@ export const qaApi = {
   },
   submitFeedback: (payload) => api.post('/qa/feedback', payload).then(r => r.data),
   listFeedback: (status) => api.get('/qa/feedback', { params: { status } }).then(r => r.data),
+  analytics: (days) => api.get('/qa/analytics', { params: { days } }).then(r => r.data),
   reviewFeedback: (id, status, note) =>
     api.post('/qa/feedback/' + id + '/review', { status, note }).then(r => r.data),
 }
@@ -183,6 +184,24 @@ export const analyticsApi = {
     api.post('/analytics/mastery/calc', { student_id: studentId, course_id: courseId }).then(r => r.data),
   classHeatmap: (classId, courseId) =>
     api.post('/analytics/class/heatmap', { class_id: classId, course_id: courseId }).then(r => r.data),
+  classReport: (classId, courseId) =>
+    api.get('/analytics/class/' + classId + '/report', { params: { course_id: courseId } }).then(r => r.data),
+  exportClassReport: (classId, courseId) =>
+    api.get('/analytics/class/' + classId + '/report/export', { params: { course_id: courseId }, responseType: 'blob' }).then(r => r.data),
+}
+
+// Teaching research
+export const teachingApi = {
+  questionStats: (courseId) =>
+    api.get('/teaching/question-stats', { params: { course_id: courseId } }).then(r => r.data),
+  exportMindmap: (courseId) =>
+    api.get('/teaching/mindmap/export', { params: { course_id: courseId }, responseType: 'blob' }).then(r => r.data),
+  uploadResource: (formData) =>
+    api.post('/teaching/resources/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data),
+  extractKnowledge: (payload) =>
+    api.post('/teaching/extract', payload).then(r => r.data),
+  importOutline: (formData) =>
+    api.post('/teaching/outline/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data),
 }
 
 // Profile
@@ -190,6 +209,12 @@ export const profileApi = {
   get: () => api.get('/profile').then(r => r.data),
   update: (payload) => api.put('/profile', payload).then(r => r.data),
   stats: (courseId) => api.get('/profile/stats', { params: { course_id: courseId } }).then(r => r.data),
+  growth: (courseId, semester) =>
+    api.get('/profile/growth', { params: { course_id: courseId, semester } }).then(r => r.data),
+  createSnapshot: (courseId, semester) =>
+    api.post('/profile/growth/snapshot', { course_id: courseId, semester }).then(r => r.data),
+  exportGrowth: (courseId, semester) =>
+    api.get('/profile/growth/export', { params: { course_id: courseId, semester }, responseType: 'blob' }).then(r => r.data),
 }
 
 // Classroom
@@ -215,6 +240,10 @@ export const examApi = {
     api.post('/exam/test/generate', { student_id: studentId, course_id: courseId, count: count || 10 }).then(r => r.data),
   submitTest: (paperId, answers) =>
     api.post('/exam/test/' + paperId + '/submit', { answers }).then(r => r.data),
+  listSubjectiveReviews: (params = {}) =>
+    api.get('/exam/subjective/reviews', { params }).then(r => r.data),
+  gradeSubjective: (attemptId, score, feedback) =>
+    api.post('/exam/subjective/' + attemptId + '/grade', { score, feedback }).then(r => r.data),
 }
 
 // Admin
@@ -222,9 +251,22 @@ export const adminApi = {
   registerAdmin: (name, email, password) => api.post('/auth/admin/register', { name, email, password }).then(r => r.data),
   loginAdmin: (email, password) => api.post('/auth/admin/login', { email, password }).then(r => r.data),
   listUsers: () => api.get('/admin/users').then(r => r.data),
+  createUser: (payload) => api.post('/admin/users', payload).then(r => r.data),
+  assignUserRole: (type, id, role) => api.patch('/admin/users/' + type + '/' + id + '/role', { role }).then(r => r.data),
+  importUsers: (users) => api.post('/admin/users/import', { users }).then(r => r.data),
+  exportUsers: () => api.get('/admin/users/export', { responseType: 'blob' }).then(r => r.data),
   disableUser: (type, id) => api.post('/admin/users/' + type + '/' + id + '/disable').then(r => r.data),
   validateGraph: () => api.get('/admin/graph/validate').then(r => r.data),
-  dashboard: (courseId) => api.get('/admin/dashboard', { params: { course_id: courseId } }).then(r => r.data),
+  fixGraphIssue: (issue) => api.post('/admin/graph/fix', { issue }).then(r => r.data),
+  listGraphBackups: () => api.get('/admin/graph/backups').then(r => r.data),
+  createGraphBackup: (label) => api.post('/admin/graph/backup', { label }).then(r => r.data),
+  cleanGraphData: () => api.post('/admin/graph/clean').then(r => r.data),
+  cleanupRedundantNodes: () => api.post('/admin/graph/cleanup-redundant').then(r => r.data),
+  incrementalUpdate: (payload) => api.post('/admin/graph/incremental-update', payload).then(r => r.data),
+  dashboard: (params = {}) => {
+    const query = typeof params === 'string' ? { course_id: params } : params
+    return api.get('/admin/dashboard', { params: query }).then(r => r.data)
+  },
 }
 
 // Discuss

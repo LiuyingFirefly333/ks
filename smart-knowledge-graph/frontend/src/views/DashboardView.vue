@@ -228,10 +228,33 @@
 
             <AdminDashboard v-if="activeNav === 'admin'" @locate="onLocateNodeId" />
 
+            <ClassLearningReport
+              v-if="activeNav === 'classReport'"
+              :classes="classes"
+              :classId="currentClassId"
+              :courseId="currentCourseId"
+              @locate-node="onLocateNodeId"
+            />
+
+            <SubjectiveReview
+              v-if="activeNav === 'review'"
+              :classes="classes"
+              :classId="currentClassId"
+              :courseId="currentCourseId"
+              @locate-node="onLocateNodeId"
+            />
+
             <ResourceLibrary
               v-if="activeNav === 'resources'"
               :courseId="currentCourseId"
               :nodes="nodes"
+            />
+
+            <TeachingResearch
+              v-if="activeNav === 'teaching'"
+              :courseId="currentCourseId"
+              :nodes="nodes"
+              @graph-updated="onTeachingGraphUpdated"
             />
 
             <div v-if="activeNav === 'manage'" class="manage-grid">
@@ -326,7 +349,7 @@
       </aside>
 
       <aside
-        v-else-if="selectedNode && !['profile', 'admin', 'manage', 'resources'].includes(activeNav)"
+        v-else-if="selectedNode && !['profile', 'admin', 'manage', 'resources', 'teaching', 'review'].includes(activeNav)"
         class="slide-panel"
       >
         <KnowledgePanel
@@ -337,6 +360,7 @@
           @locate="onLocateNode"
           @show-roadmap="onShowRoadmap"
           @ask-ai="onAskAI"
+          @mastery-updated="onManualMasteryUpdated"
         />
       </aside>
     </div>
@@ -357,6 +381,9 @@ import TestPaper from '../components/TestPaper.vue'
 import AdminDashboard from '../components/AdminDashboard.vue'
 import ProfileCenter from '../components/ProfileCenter.vue'
 import ResourceLibrary from '../components/ResourceLibrary.vue'
+import ClassLearningReport from '../components/ClassLearningReport.vue'
+import TeachingResearch from '../components/TeachingResearch.vue'
+import SubjectiveReview from '../components/SubjectiveReview.vue'
 
 const props = defineProps({ user: { type: Object, default: null } })
 defineEmits(['logout', 'profile-updated'])
@@ -372,6 +399,9 @@ const NAV_DEFS = {
   errors: { key: 'errors', icon: 'ER', label: '错题本', hint: '错题溯源分析' },
   paper: { key: 'paper', icon: 'EX', label: '智能组卷', hint: '薄弱点专项训练' },
   resources: { key: 'resources', icon: 'RS', label: '资源库', hint: '资源管理与批量挂载' },
+  teaching: { key: 'teaching', icon: 'TR', label: '备课教研', hint: '课件上传、抽取建图与命题统计' },
+  classReport: { key: 'classReport', icon: 'CR', label: '班级报告', hint: '错题统计与精准教学' },
+  review: { key: 'review', icon: 'RV', label: '主观题批阅', hint: '批阅待处理主观题' },
   manage: { key: 'manage', icon: 'MG', label: '知识管理', hint: '维护节点与关系' },
   admin: { key: 'admin', icon: 'AD', label: '数据看板', hint: '平台与知识库运营' },
   profile: { key: 'profile', icon: 'ME', label: '个人中心', hint: '资料编辑与学习概览' },
@@ -379,7 +409,7 @@ const NAV_DEFS = {
 
 const ROLE_NAV_KEYS = {
   student: ['graph', 'browse', 'qa', 'path', 'errors', 'paper'],
-  teacher: ['graph', 'browse', 'qa', 'resources', 'manage'],
+  teacher: ['graph', 'browse', 'qa', 'teaching', 'classReport', 'review', 'resources', 'manage'],
   admin: ['graph', 'browse', 'resources', 'manage', 'admin'],
 }
 
@@ -735,6 +765,33 @@ function onAskAI(node) {
 
 function onClearFocus() {
   focusedNode.value = null
+}
+
+async function onTeachingGraphUpdated() {
+  await fetchGraph()
+  await fetchCategories()
+}
+
+async function onManualMasteryUpdated(payload) {
+  const nodeId = payload?.node_id
+  const score = Number(payload?.score || 0)
+  if (nodeId) {
+    const level = score >= 85 ? 'proficient' : score >= 60 ? 'fair' : score > 0 ? 'weak' : 'unlearned'
+    masteryMap.value = {
+      ...masteryMap.value,
+      [nodeId]: { ...(masteryMap.value[nodeId] || {}), score, level, manual_score: score },
+    }
+    nodes.value = nodes.value.map(node => (
+      node.id === nodeId
+        ? { ...node, mastery_score: score, mastery_level: level, manual_score: score }
+        : node
+    ))
+    if (selectedNode.value?.id === nodeId) {
+      selectedNode.value = { ...selectedNode.value, mastery_score: score, mastery_level: level, manual_score: score }
+    }
+  }
+  await fetchMastery()
+  await fetchGraph()
 }
 
 function zoomIn() {

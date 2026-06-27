@@ -7,6 +7,9 @@ import json
 
 bp = Blueprint("qa", __name__, url_prefix="/api/qa")
 
+RELATION_TYPES = {"PREREQUISITE", "RELATED_TO"}
+TRIPLE_ACTIONS = {"upsert", "delete", "replace"}
+
 SYSTEM_PROMPT = """你是一个基于学校内部知识图谱的 AI 学习助手。
 回答必须优先依据【知识图谱上下文】，包括知识点属性、前置/后置关系、关联资源和练习。
 
@@ -46,6 +49,7 @@ def _ensure_session(data):
         data.get("course_id"),
         data.get("node_id"),
     )
+    db.record_qa_event("session_created", current_user_id(), current_role(), session["id"], "", data.get("course_id"), [], {"title": title})
     audit("qa.session.create", "QASession", session["id"], {"title": title})
     return session, None
 
@@ -95,6 +99,18 @@ def build_context_from_nodes(nodes: list[dict], neighbors: list[dict] | None = N
     return "\n\n".join(parts)
 
 
+def _format_entities(entities: list[dict]) -> str:
+    if not entities:
+        return "【实体抽取结果】\n未抽取到可映射知识点实体。"
+    lines = ["【实体抽取结果】"]
+    for item in entities:
+        lines.append(
+            f"- {item.get('name')}（ID: {item.get('id')}，分类: {item.get('category', '未分类')}，"
+            f"匹配: {item.get('match_type', 'keyword')}，置信度: {item.get('confidence', 0)}）"
+        )
+    return "\n".join(lines)
+
+
 def build_focused_context(focus_data: dict) -> str:
     node = focus_data["node"]
     parts = ["【当前聚焦知识点】", _format_node(node, "聚焦知识点")]
@@ -128,12 +144,29 @@ def _build_qa_payload(data, history_messages):
         for nb in focus_data.get("neighbors", [])[:6]:
             sources.append({"id": nb["id"], "name": nb["name"], "category": nb.get("category", "")})
     else:
-        nodes = db.search_course_nodes(course_id, question) if course_id else db.search_nodes(question)
-        top_nodes = nodes[:5]
+        entities = db.extract_qa_entities(question, course_id, 8)
+        top_nodes = [item["node"] for item in entities[:5]]
+        if not top_nodes:
+            nodes = db.search_course_nodes(course_id, question) if course_id else db.search_nodes(question)
+            top_nodes = nodes[:5]
+            entities = [{
+                "id": n["id"],
+                "name": n["name"],
+                "category": n.get("category", ""),
+                "match_type": "search",
+                "confidence": 0.5,
+                "node": n,
+            } for n in top_nodes]
         node_ids = [n["id"] for n in top_nodes]
         neighbors = db.expand_neighbors(node_ids) if node_ids else []
-        context = build_context_from_nodes(top_nodes, neighbors)
-        sources = [{"id": n["id"], "name": n["name"], "category": n.get("category", "")} for n in top_nodes]
+        context = _format_entities(entities[:8]) + "\n\n" + build_context_from_nodes(top_nodes, neighbors)
+        sources = [{
+            "id": item["id"],
+            "name": item["name"],
+            "category": item.get("category", ""),
+            "match_type": item.get("match_type", ""),
+            "confidence": item.get("confidence", 0),
+        } for item in entities[:8]]
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for msg in history_messages[-8:]:
@@ -144,6 +177,64 @@ def _build_qa_payload(data, history_messages):
         "content": f"知识图谱上下文：\n\n{context}\n\n用户问题：{question}",
     })
     return {"question": question, "sources": sources, "messages": messages}, None
+
+
+def _normalize_entities(data):
+    entities = data.get("entities") or []
+    if not isinstance(entities, list):
+        return []
+    normalized = []
+    for item in entities[:20]:
+        if not isinstance(item, dict):
+            continue
+        entity_id = item.get("id") or item.get("node_id")
+        name = item.get("name") or item.get("mention")
+        if not entity_id and not name:
+            continue
+        normalized.append({
+            "id": entity_id or "",
+            "name": name or "",
+            "category": item.get("category", ""),
+            "match_type": item.get("match_type", "manual"),
+            "confidence": item.get("confidence", 1),
+        })
+    return normalized
+
+
+def _normalize_triples(data):
+    triples = data.get("triples") or []
+    if not isinstance(triples, list):
+        return [], "triples 必须是数组"
+    normalized = []
+    for index, item in enumerate(triples[:20], start=1):
+        if not isinstance(item, dict):
+            return [], f"第 {index} 条三元组格式无效"
+        action = (item.get("action") or "upsert").strip()
+        source_id = (item.get("source_id") or item.get("source") or "").strip()
+        target_id = (item.get("target_id") or item.get("target") or "").strip()
+        relation_type = (item.get("relation_type") or item.get("type") or "RELATED_TO").strip().upper()
+        if action not in TRIPLE_ACTIONS:
+            return [], f"第 {index} 条三元组 action 无效"
+        if relation_type not in RELATION_TYPES:
+            return [], f"第 {index} 条三元组关系类型无效"
+        if not source_id or not target_id:
+            return [], f"第 {index} 条三元组缺少 source_id 或 target_id"
+        try:
+            weight = float(item.get("weight", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            return [], f"第 {index} 条三元组权重无效"
+        normalized.append({
+            "action": action,
+            "source_id": source_id,
+            "target_id": target_id,
+            "relation_type": relation_type,
+            "old_source_id": (item.get("old_source_id") or "").strip(),
+            "old_target_id": (item.get("old_target_id") or "").strip(),
+            "old_relation_type": (item.get("old_relation_type") or "").strip().upper(),
+            "weight": weight,
+            "note": item.get("note", ""),
+        })
+    return normalized, None
 
 
 @bp.route("/sessions", methods=["POST"])
@@ -157,6 +248,7 @@ def create_session():
         data.get("course_id"),
         data.get("node_id"),
     )
+    db.record_qa_event("session_created", current_user_id(), current_role(), session["id"], "", data.get("course_id"), [], {"title": session["title"]})
     audit("qa.session.create", "QASession", session["id"], {"title": session["title"]})
     return jsonify(session), 201
 
@@ -217,6 +309,16 @@ def ask():
 
     try:
         user_msg = db.add_qa_message(session["id"], current_user_id(), "user", payload["question"], payload["sources"])
+        db.record_qa_event(
+            "question_submitted",
+            current_user_id(),
+            current_role(),
+            session["id"],
+            user_msg["id"],
+            data.get("course_id"),
+            [s["id"] for s in payload["sources"] if s.get("id")],
+            {"stream": False},
+        )
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
         response = client.chat.completions.create(
             model=DEEPSEEK_MODEL,
@@ -232,6 +334,16 @@ def ask():
             answer,
             payload["sources"],
             user_msg["id"],
+        )
+        db.record_qa_event(
+            "answer_generated",
+            current_user_id(),
+            current_role(),
+            session["id"],
+            ai_msg["id"],
+            data.get("course_id"),
+            [s["id"] for s in payload["sources"] if s.get("id")],
+            {"stream": False, "answer_length": len(answer or "")},
         )
         audit("qa.ask", "QASession", session["id"], {"sources": [s["id"] for s in payload["sources"]]})
         return jsonify({
@@ -261,6 +373,16 @@ def ask_stream():
         return error
 
     user_msg = db.add_qa_message(session["id"], current_user_id(), "user", payload["question"], payload["sources"])
+    db.record_qa_event(
+        "question_submitted",
+        current_user_id(),
+        current_role(),
+        session["id"],
+        user_msg["id"],
+        data.get("course_id"),
+        [s["id"] for s in payload["sources"] if s.get("id")],
+        {"stream": True},
+    )
 
     def generate():
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
@@ -288,6 +410,16 @@ def ask_stream():
                 payload["sources"],
                 user_msg["id"],
             )
+            db.record_qa_event(
+                "answer_generated",
+                current_user_id(),
+                current_role(),
+                session["id"],
+                ai_msg["id"],
+                data.get("course_id"),
+                [s["id"] for s in payload["sources"] if s.get("id")],
+                {"stream": True, "answer_length": len(full_answer or "")},
+            )
             audit("qa.ask.stream", "QASession", session["id"], {"sources": [s["id"] for s in payload["sources"]]})
             yield f"data: {json.dumps({'type': 'done', 'message_id': ai_msg['id']}, ensure_ascii=False)}\n\n"
         except Exception as e:
@@ -310,6 +442,10 @@ def create_feedback():
     session = db.get_qa_session(data["session_id"])
     if not _role_can_access_session(session):
         return legacy_fail("会话不存在或无权访问", 404, "QA_SESSION_NOT_FOUND")
+    triples, triple_error = _normalize_triples(data)
+    if triple_error:
+        return legacy_fail(triple_error, 400, "VALIDATION_ERROR")
+    entities = _normalize_entities(data)
     feedback = db.create_qa_feedback(
         current_user_id(),
         current_role(),
@@ -319,6 +455,18 @@ def create_feedback():
         data.get("correct_description", ""),
         data.get("target_type", "node"),
         data.get("target_id", ""),
+        entities,
+        triples,
+    )
+    db.record_qa_event(
+        "feedback_created",
+        current_user_id(),
+        current_role(),
+        data["session_id"],
+        data["message_id"],
+        session.get("course_id"),
+        [item["id"] for item in entities if item.get("id")],
+        {"feedback_id": feedback["id"], "target_type": feedback.get("target_type")},
     )
     audit("qa.feedback.create", "QAFeedback", feedback["id"])
     return jsonify(feedback), 201
@@ -328,6 +476,13 @@ def create_feedback():
 @require_roles("admin")
 def list_feedback():
     return jsonify(db.list_qa_feedback(request.args.get("status")))
+
+
+@bp.route("/analytics", methods=["GET"])
+@require_roles("admin")
+def qa_analytics():
+    days = request.args.get("days", 30, type=int)
+    return jsonify(db.get_qa_analytics(days))
 
 
 @bp.route("/feedback/<feedback_id>/review", methods=["POST"])
@@ -353,6 +508,24 @@ def review_feedback(feedback_id):
             if len(parts) == 3:
                 db.create_relation(parts[0], parts[1], parts[2], 1.0)
                 audit("qa.feedback.apply.relation", "Relation", target_id, {"feedback_id": feedback_id})
+        applied = db.apply_qa_feedback_triples(feedback_id)
+        for item in applied:
+            audit("qa.feedback.apply.triple", "Relation", f"{item.get('source_id')}->{item.get('target_id')}", {
+                "feedback_id": feedback_id,
+                "action": item.get("action"),
+                "relation_type": item.get("relation_type"),
+                "status": item.get("status"),
+            })
 
+    db.record_qa_event(
+        "feedback_reviewed",
+        current_user_id(),
+        current_role(),
+        feedback.get("session_id", ""),
+        feedback.get("message_id", ""),
+        "",
+        [],
+        {"feedback_id": feedback_id, "status": status},
+    )
     audit("qa.feedback.review", "QAFeedback", feedback_id, {"status": status})
-    return jsonify(feedback)
+    return jsonify(db.get_qa_feedback(feedback_id) or feedback)

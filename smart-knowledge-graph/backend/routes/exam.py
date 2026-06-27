@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from models.neo4j_client import db
-from routes.security import assert_self_or_roles, audit, current_user_id, legacy_fail, require_roles
+from routes.security import assert_self_or_roles, audit, current_role, current_user_id, legacy_fail, require_roles
 
 bp = Blueprint("exam", __name__, url_prefix="/api/exam")
 
@@ -156,4 +156,54 @@ def submit_test(paper_id):
     if not result:
         return legacy_fail("试卷不存在", 404, "PAPER_NOT_FOUND")
     audit("exam.paper.submit", "TestPaper", paper_id, {"student_id": owner_id})
+    return jsonify(result)
+
+
+@bp.route("/subjective/reviews", methods=["GET"])
+@require_roles("teacher", "admin")
+def list_subjective_reviews():
+    role = current_role()
+    rows = db.list_subjective_reviews(
+        teacher_id=current_user_id() or "",
+        role=role,
+        course_id=request.args.get("course_id") or None,
+        class_id=request.args.get("class_id") or None,
+        status=request.args.get("status", "pending_review"),
+        limit=int(request.args.get("limit", 100) or 100),
+    )
+    return jsonify(rows)
+
+
+@bp.route("/subjective/<attempt_id>/grade", methods=["POST"])
+@require_roles("teacher", "admin")
+def grade_subjective_attempt(attempt_id):
+    owner_id = db.get_subjective_attempt_owner(attempt_id)
+    if not owner_id:
+        return legacy_fail("主观题作答不存在", 404, "ATTEMPT_NOT_FOUND")
+    role = current_role()
+    teacher_id = current_user_id() or ""
+    if role == "teacher" and not db.teacher_can_access_student(teacher_id, owner_id):
+        return legacy_fail("无权批阅该学生作答", 403, "FORBIDDEN")
+
+    data = request.json or {}
+    if "score" not in data:
+        return legacy_fail("缺少必填字段：score", 400, "VALIDATION_ERROR")
+    try:
+        score = int(data.get("score"))
+    except (TypeError, ValueError):
+        return legacy_fail("分数必须是整数", 400, "VALIDATION_ERROR")
+
+    result = db.grade_subjective_attempt(
+        attempt_id,
+        teacher_id,
+        score,
+        data.get("feedback", ""),
+    )
+    if not result:
+        return legacy_fail("主观题作答不存在", 404, "ATTEMPT_NOT_FOUND")
+    audit("exam.subjective.grade", "AnswerAttempt", attempt_id, {
+        "student_id": owner_id,
+        "score": result.get("attempt", {}).get("score"),
+        "paper_id": result.get("paper", {}).get("id"),
+    })
     return jsonify(result)
