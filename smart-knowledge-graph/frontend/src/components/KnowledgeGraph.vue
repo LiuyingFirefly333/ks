@@ -14,9 +14,6 @@
       <span class="graph-stat-chip">{{ props.links.length }} 边</span>
       <span class="toolbar-sep"></span>
       <button @click="fitToScreen" title="适应画布">适应</button>
-      <button @click="exportSVG" title="导出 SVG 图片">SVG</button>
-      <button @click="exportJSON" title="导出 JSON 数据">JSON</button>
-      <button @click="exportCSV" title="导出 CSV 表格">CSV</button>
     </div>
 
     <div class="graph-mode-label">
@@ -866,5 +863,5 @@ onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect()
 })
 
-defineExpose({ fitToScreen, locateNode, zoomBy, getViewport: currentViewport })
+defineExpose({ fitToScreen, locateNode, zoomBy, exportSVG, exportJSON, exportCSV, getViewport: currentViewport })
 </script>

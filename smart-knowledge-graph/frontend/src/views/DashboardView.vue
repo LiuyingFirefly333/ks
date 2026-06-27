@@ -16,9 +16,12 @@
 
       <div class="topbar-user">
         <span class="user-role-badge">{{ roleLabel }}</span>
-        <span class="user-name">{{ user?.name || '未命名用户' }}</span>
-        <button class="ghost-button" @click="switchNav('profile')">个人中心</button>
-        <button class="ghost-button" @click="$emit('logout')">退出</button>
+        <span class="user-name">{{ displayName }}</span>
+        <button class="avatar-button" :title="'个人中心：' + displayName" aria-label="打开个人中心" @click="switchNav('profile')">
+          <img v-if="user?.avatar_url" :src="user.avatar_url" :alt="displayName + '的头像'" />
+          <span v-else class="avatar-fallback">{{ userInitials }}</span>
+        </button>
+        <button class="logout-button" @click="$emit('logout')">退出</button>
       </div>
     </header>
 
@@ -145,7 +148,7 @@
           </div>
         </div>
 
-        <div v-if="activeNav === 'graph'" class="floating-tools">
+        <div v-if="activeNav === 'graph'" class="graph-action-tools">
           <button
             v-if="canEditGraph"
             :class="{ active: graphEditMode }"
@@ -154,8 +157,39 @@
           >
             {{ graphEditMode ? '完成' : '编辑' }}
           </button>
-          <button title="放大" @click="zoomIn">+</button>
-          <button title="缩小" @click="zoomOut">-</button>
+          <div class="graph-export-dropdown">
+            <button
+              class="graph-export-button"
+              :class="{ active: exportMenuOpen }"
+              title="导出图谱"
+              @click="exportMenuOpen = !exportMenuOpen"
+            >
+              导出图谱
+            </button>
+            <div v-if="exportMenuOpen" class="graph-export-menu">
+              <button @click="exportGraph('svg')">SVG 图片</button>
+              <button @click="exportGraph('json')">JSON 数据</button>
+              <button @click="exportGraph('csv')">CSV 表格</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="activeNav === 'graph'" class="graph-zoom-tools">
+          <button title="放大" aria-label="放大图谱" @click="zoomIn">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" />
+              <path d="M11 8v6" />
+              <path d="M8 11h6" />
+            </svg>
+          </button>
+          <button title="缩小" aria-label="缩小图谱" @click="zoomOut">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" />
+              <path d="M8 11h6" />
+            </svg>
+          </button>
         </div>
 
         <div v-if="activeNav === 'graph'" class="floating-legend">
@@ -177,7 +211,7 @@
               <h2>{{ currentNavLabel }}</h2>
               <p>{{ currentNavHint }}</p>
             </div>
-            <button class="soft-button" @click="switchNav('graph')">返回图谱</button>
+            <button class="return-graph-button" @click="switchNav('graph')">返回图谱</button>
           </div>
 
           <div class="workspace-page-body">
@@ -413,6 +447,8 @@ const { showToast } = useToast()
 
 const roleLabel = computed(() => ({ student: '学生', teacher: '教师', admin: '管理员' }[props.user?.role] || '学生'))
 const canEditGraph = computed(() => props.user?.role === 'teacher' || props.user?.role === 'admin')
+const displayName = computed(() => props.user?.nickname || props.user?.name || props.user?.email || '未命名用户')
+const userInitials = computed(() => String(displayName.value || 'U').trim().slice(0, 2).toUpperCase())
 
 const NAV_DEFS = {
   graph: { key: 'graph', icon: 'KG', label: '知识图谱', hint: '全局关系视图' },
@@ -536,6 +572,7 @@ const {
 } = useClassroomHeatmap(userRef, currentCourseId, fetchGraph)
 const focusedNode = ref(null)
 const graphEditMode = ref(false)
+const exportMenuOpen = ref(false)
 const relationSourceId = ref('')
 const relationDraftType = ref('PREREQUISITE')
 const relationDraftWeight = ref(1)
@@ -577,6 +614,7 @@ function toggleGraphEdit(force) {
   if (!canEditGraph.value) return
   graphEditMode.value = typeof force === 'boolean' ? force : !graphEditMode.value
   activeNav.value = 'graph'
+  exportMenuOpen.value = false
   if (!graphEditMode.value) {
     selectedLink.value = null
     relationSourceId.value = ''
@@ -593,6 +631,7 @@ function switchNav(key) {
   const nextKey = isNavAllowed(key) ? key : 'graph'
   if (activeNav.value === 'graph' && nextKey !== 'graph') recordGraphViewport()
   activeNav.value = nextKey
+  exportMenuOpen.value = false
 }
 
 function onNavClick(key) {
@@ -735,6 +774,13 @@ function zoomIn() {
 
 function zoomOut() {
   if (graphRef.value?.zoomBy) graphRef.value.zoomBy(0.86)
+}
+
+function exportGraph(format) {
+  exportMenuOpen.value = false
+  if (format === 'svg') graphRef.value?.exportSVG?.()
+  else if (format === 'json') graphRef.value?.exportJSON?.()
+  else if (format === 'csv') graphRef.value?.exportCSV?.()
 }
 
 async function onSaveNode(node, payload) {

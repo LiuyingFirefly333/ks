@@ -566,7 +566,7 @@ class Neo4jClient:
                     token_expires_at: datetime($token_expires_at),
                     created_at: datetime()
                 })
-                RETURN s { .id, .name, .email, .token,
+                RETURN s { .id, .name, .email, .nickname, .avatar_url, .bio, .token,
                     token_expires_at: toString(s.token_expires_at),
                     created_at: toString(s.created_at)
                 } as student
@@ -598,7 +598,7 @@ class Neo4jClient:
                 SET s.token = $token,
                     s.token_expires_at = datetime($token_expires_at),
                     s.password_hash = CASE WHEN $needs_upgrade THEN $password_hash ELSE s.password_hash END
-                RETURN s { .id, .name, .email, .token,
+                RETURN s { .id, .name, .email, .nickname, .avatar_url, .bio, .token,
                     token_expires_at: toString(s.token_expires_at),
                     created_at: toString(s.created_at)
                 } as student
@@ -617,7 +617,7 @@ class Neo4jClient:
                 WHERE coalesce(s.disabled, false) = false
                   AND s.token_expires_at IS NOT NULL
                   AND s.token_expires_at > datetime()
-                RETURN s { .id, .name, .email,
+                RETURN s { .id, .name, .email, .nickname, .avatar_url, .bio,
                     token_expires_at: toString(s.token_expires_at),
                     created_at: toString(s.created_at)
                 } as student
@@ -649,7 +649,7 @@ class Neo4jClient:
                     token_expires_at: datetime($token_expires_at),
                     created_at: datetime()
                 })
-                RETURN t { .id, .name, .email, .token,
+                RETURN t { .id, .name, .email, .nickname, .avatar_url, .bio, .token,
                     token_expires_at: toString(t.token_expires_at),
                     created_at: toString(t.created_at)
                 } as teacher
@@ -681,7 +681,7 @@ class Neo4jClient:
                 SET t.token = $token,
                     t.token_expires_at = datetime($token_expires_at),
                     t.password_hash = CASE WHEN $needs_upgrade THEN $password_hash ELSE t.password_hash END
-                RETURN t { .id, .name, .email, .token,
+                RETURN t { .id, .name, .email, .nickname, .avatar_url, .bio, .token,
                     token_expires_at: toString(t.token_expires_at),
                     created_at: toString(t.created_at)
                 } as teacher
@@ -700,7 +700,7 @@ class Neo4jClient:
                 WHERE coalesce(t.disabled, false) = false
                   AND t.token_expires_at IS NOT NULL
                   AND t.token_expires_at > datetime()
-                RETURN t { .id, .name, .email,
+                RETURN t { .id, .name, .email, .nickname, .avatar_url, .bio,
                     token_expires_at: toString(t.token_expires_at),
                     created_at: toString(t.created_at)
                 } as teacher
@@ -2829,7 +2829,7 @@ class Neo4jClient:
                 SET a.token = $token,
                     a.token_expires_at = datetime($token_expires_at),
                     a.password_hash = CASE WHEN $needs_upgrade THEN $password_hash ELSE a.password_hash END
-                RETURN a { .id, .name, .email, .token,
+                RETURN a { .id, .name, .email, .nickname, .avatar_url, .bio, .token,
                     token_expires_at: toString(a.token_expires_at)
                 } as admin
                 """,
@@ -2885,7 +2885,7 @@ class Neo4jClient:
                 WHERE coalesce(u.disabled, false) = false
                 SET u.token = $new_token,
                     u.token_expires_at = datetime($token_expires_at)
-                RETURN u {{ .id, .name, .email, .token,
+                RETURN u {{ .id, .name, .email, .nickname, .avatar_url, .bio, .token,
                     token_expires_at: toString(u.token_expires_at)
                 }} as user
                 """,

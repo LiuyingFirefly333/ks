@@ -1,15 +1,50 @@
 <template>
   <div class="profile-center">
     <section class="profile-hero">
-      <div class="profile-avatar" :style="{ backgroundImage: avatarStyle }">
-        <span v-if="!form.avatar_url">{{ initials }}</span>
+      <div class="profile-avatar-block">
+        <button
+          type="button"
+          class="profile-avatar"
+          :class="{ clickable: !!form.avatar_url }"
+          :style="{ backgroundImage: avatarStyle }"
+          :aria-label="form.avatar_url ? '查看头像大图' : '暂无头像'"
+          :title="form.avatar_url ? '查看头像大图' : '暂无头像'"
+          @click="openAvatarPreview"
+        >
+          <span v-if="!form.avatar_url">{{ initials }}</span>
+        </button>
+        <button class="profile-avatar-edit" :disabled="avatarUploading" @click="openAvatarUpload">
+          {{ avatarUploading ? '上传中...' : '修改头像 >' }}
+        </button>
+        <input
+          ref="avatarInputRef"
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          class="hidden-file-input"
+          @change="onAvatarFileChange"
+        />
       </div>
       <div class="profile-hero-main">
         <div class="profile-kicker">{{ roleText }}</div>
         <h2>{{ displayName }}</h2>
         <p>{{ form.bio || '记录学习轨迹、掌握情况和个人资料。' }}</p>
       </div>
-      <button class="soft-button" @click="loadAll">刷新</button>
+      <button
+        type="button"
+        class="icon-button profile-refresh-button"
+        :class="{ refreshing }"
+        title="刷新"
+        aria-label="刷新个人中心"
+        :aria-busy="refreshing ? 'true' : 'false'"
+        @click="loadAll({ notify: true })"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 2v6h-6" />
+          <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+          <path d="M3 22v-6h6" />
+          <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+        </svg>
+      </button>
     </section>
 
     <div class="profile-grid">
@@ -22,10 +57,6 @@
         <div class="form-row">
           <label>昵称 / 姓名</label>
           <input v-model="form.name" placeholder="请输入昵称" />
-        </div>
-        <div class="form-row">
-          <label>头像 URL</label>
-          <input v-model="form.avatar_url" placeholder="https://..." />
         </div>
         <div class="form-row">
           <label>个人简介</label>
@@ -173,18 +204,27 @@
         </div>
       </template>
     </section>
+
+    <div v-if="avatarPreviewOpen" class="profile-avatar-preview" @click.self="closeAvatarPreview">
+      <div class="profile-avatar-preview-card">
+        <button class="icon-button" aria-label="关闭头像预览" @click="closeAvatarPreview">×</button>
+        <img :src="form.avatar_url" :alt="displayName + '的头像大图'" />
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { profileApi } from '../api/index.js'
+import { useToast } from '../composables/useToast.js'
 
 const props = defineProps({
   user: { type: Object, default: null },
   courseId: { type: String, default: '' },
 })
 const emit = defineEmits(['updated', 'locate'])
+const { showToast } = useToast()
 
 const form = reactive({ name: '', avatar_url: '', bio: '' })
 const stats = ref(null)
@@ -193,6 +233,10 @@ const growthLoading = ref(false)
 const selectedSemester = ref('')
 const saving = ref(false)
 const savedText = ref('')
+const refreshing = ref(false)
+const avatarInputRef = ref(null)
+const avatarUploading = ref(false)
+const avatarPreviewOpen = ref(false)
 
 const roleText = computed(() => ({ student: '学生', teacher: '教师', admin: '管理员' }[props.user?.role] || '用户'))
 const displayName = computed(() => form.name || props.user?.name || '未命名用户')
@@ -286,11 +330,28 @@ async function loadGrowth() {
   }
 }
 
-async function loadAll() {
+async function loadAll(options = {}) {
+  const notify = options?.notify === true
+  if (notify && refreshing.value) return
+  const startedAt = Date.now()
+  let toastMessage = ''
+  let toastType = 'success'
+  if (notify) refreshing.value = true
   try {
     await Promise.all([loadProfile(), loadStats(), loadGrowth()])
+    toastMessage = '刷新成功'
   } catch (err) {
-    savedText.value = err.normalizedMessage || '加载失败'
+    const message = err.normalizedMessage || '加载失败'
+    savedText.value = message
+    toastMessage = message
+    toastType = 'error'
+  } finally {
+    if (notify) {
+      const remaining = Math.max(0, 650 - (Date.now() - startedAt))
+      if (remaining) await new Promise(resolve => setTimeout(resolve, remaining))
+      refreshing.value = false
+      showToast(toastMessage, toastType)
+    }
   }
 }
 
@@ -326,7 +387,6 @@ async function saveProfile() {
   try {
     const data = await profileApi.update({
       name: form.name.trim(),
-      avatar_url: form.avatar_url.trim(),
       bio: form.bio.trim(),
     })
     fillProfile(data.profile)
@@ -336,6 +396,43 @@ async function saveProfile() {
     savedText.value = err.normalizedMessage || '保存失败'
   } finally {
     saving.value = false
+  }
+}
+
+function openAvatarUpload() {
+  avatarInputRef.value?.click()
+}
+
+function openAvatarPreview() {
+  if (!form.avatar_url) return
+  avatarPreviewOpen.value = true
+}
+
+function closeAvatarPreview() {
+  avatarPreviewOpen.value = false
+}
+
+async function onAvatarFileChange(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    savedText.value = '请选择图片文件'
+    return
+  }
+  avatarUploading.value = true
+  savedText.value = ''
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const data = await profileApi.uploadAvatar(formData)
+    fillProfile(data.profile)
+    emit('updated', { ...data.profile, role: data.role })
+    savedText.value = '头像已更新'
+  } catch (err) {
+    savedText.value = err.normalizedMessage || '头像上传失败'
+  } finally {
+    avatarUploading.value = false
   }
 }
 

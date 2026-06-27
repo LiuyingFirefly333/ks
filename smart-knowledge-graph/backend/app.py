@@ -15,8 +15,8 @@ from routes.discuss import bp as discuss_bp
 from routes.exam import bp as exam_bp
 from routes.graph import bp as graph_bp
 from routes.knowledge import bp as knowledge_bp
-from routes.qa import bp as qa_bp
 from routes.profile import bp as profile_bp
+from routes.qa import bp as qa_bp
 from routes.recommend import bp as recommend_bp
 from routes.resources import bp as resources_bp
 from routes.teaching import bp as teaching_bp
@@ -109,6 +109,11 @@ def create_app():
     @app.route("/uploads/teaching/<path:filename>")
     def teaching_upload(filename):
         upload_dir = Path(__file__).resolve().parent / "uploads" / "teaching"
+        return send_from_directory(upload_dir, filename)
+
+    @app.route("/uploads/avatars/<path:filename>")
+    def avatar_upload(filename):
+        upload_dir = Path(__file__).resolve().parent / "uploads" / "avatars"
         return send_from_directory(upload_dir, filename)
 
     @app.route("/api/health")

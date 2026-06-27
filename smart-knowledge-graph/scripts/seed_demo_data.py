@@ -2,6 +2,9 @@
 
 Run from the repository root:
     python scripts/seed_demo_data.py
+
+Run inside Docker:
+    docker compose exec backend python /scripts/seed_demo_data.py
 """
 
 from pathlib import Path
@@ -9,7 +12,10 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "backend"))
+BACKEND_DIR = ROOT / "backend"
+if not BACKEND_DIR.exists() and Path("/app").exists():
+    BACKEND_DIR = Path("/app")
+sys.path.insert(0, str(BACKEND_DIR))
 
 from models.neo4j_client import db  # noqa: E402
 
@@ -143,7 +149,7 @@ def seed_graph(teacher_id, student_id):
                 "id": "demo-question-derivative-1",
                 "type": "single_choice",
                 "stem": "若函数在某点可导，则该点一定满足哪项性质？",
-                "options": ["连续", "取极大值", "二阶可导", "单调递增"],
+                "options": ["连续", "取得极大值", "二阶可导", "单调递增"],
                 "answer": "A",
                 "analysis": "可导必连续，连续不一定可导。",
                 "difficulty": 2,
@@ -242,8 +248,7 @@ def seed_graph(teacher_id, student_id):
             MERGE (student)-[:ANSWERED]->(a2)
             MERGE (a2)-[:FOR_QUESTION]->(q2)
             MERGE (a2)-[:IN_PAPER]->(paper)
-            """
-            ,
+            """,
             student_id=student_id,
         )
 

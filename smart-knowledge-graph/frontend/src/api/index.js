@@ -214,6 +214,8 @@ export const teachingApi = {
 export const profileApi = {
   get: () => api.get('/profile').then(r => r.data),
   update: (payload) => api.put('/profile', payload).then(r => r.data),
+  uploadAvatar: (formData) =>
+    api.post('/profile/avatar', formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data),
   stats: (courseId) => api.get('/profile/stats', { params: { course_id: courseId } }).then(r => r.data),
   growth: (courseId, semester) =>
     api.get('/profile/growth', { params: { course_id: courseId, semester } }).then(r => r.data),

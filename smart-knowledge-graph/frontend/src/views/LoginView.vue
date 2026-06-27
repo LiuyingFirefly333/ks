@@ -21,33 +21,108 @@
         <p>{{ mode === 'login' ? '登录后进入个人学习工作台' : '注册后即可开始构建学习档案' }}</p>
       </div>
 
-      <div class="segmented login-tabs">
-        <button :class="{ active: mode === 'login' }" @click="mode = 'login'; clearError()">登录</button>
-        <button :class="{ active: mode === 'register' }" @click="mode = 'register'; clearError()">注册</button>
-      </div>
-
-      <div class="segmented role-tabs">
-        <button :class="{ active: role === 'student' }" @click="role = 'student'">学生</button>
-        <button :class="{ active: role === 'teacher' }" @click="role = 'teacher'">教师</button>
-        <button :class="{ active: role === 'admin' }" @click="role = 'admin'">管理员</button>
-      </div>
-
       <form @submit.prevent="handleSubmit" class="login-form">
+        <div class="form-row">
+          <label>人员类型</label>
+          <select v-model="role">
+            <option value="student">学生</option>
+            <option value="teacher">教师</option>
+            <option value="admin">管理员</option>
+          </select>
+        </div>
         <div class="form-row" v-if="mode === 'register'">
           <label>姓名</label>
           <input v-model="form.name" placeholder="输入姓名" />
         </div>
         <div class="form-row">
           <label>邮箱</label>
-          <input v-model="form.email" type="email" placeholder="name@example.com" />
+          <div class="input-icon-field">
+            <input v-model="form.email" type="email" placeholder="name@example.com" />
+            <span class="input-trailing-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <rect x="3" y="5" width="18" height="14" rx="2" />
+                <path d="m3 7 9 6 9-6" />
+              </svg>
+            </span>
+          </div>
         </div>
         <div class="form-row">
           <label>密码</label>
-          <input v-model="form.password" type="password" placeholder="输入密码" />
+          <div class="password-field">
+            <input
+              v-model="form.password"
+              :type="showPassword ? 'text' : 'password'"
+              placeholder="输入密码"
+            />
+            <button
+              type="button"
+              class="password-toggle"
+              :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+              :title="showPassword ? '隐藏密码' : '显示密码'"
+              @click="showPassword = !showPassword"
+            >
+              <svg v-if="showPassword" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 3l18 18" />
+                <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
+                <path d="M9.9 4.2A10.6 10.6 0 0 1 12 4c6.5 0 10 8 10 8a18 18 0 0 1-3.2 4.5" />
+                <path d="M6.5 6.5C3.7 8.3 2 12 2 12s3.5 8 10 8a10.8 10.8 0 0 0 5.5-1.5" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="form-row" v-if="mode === 'register'">
+          <label>确认密码</label>
+          <div class="password-field">
+            <input
+              v-model="form.confirmPassword"
+              :type="showConfirmPassword ? 'text' : 'password'"
+              placeholder="再次输入密码"
+            />
+            <button
+              type="button"
+              class="password-toggle"
+              :aria-label="showConfirmPassword ? '隐藏确认密码' : '显示确认密码'"
+              :title="showConfirmPassword ? '隐藏确认密码' : '显示确认密码'"
+              @click="showConfirmPassword = !showConfirmPassword"
+            >
+              <svg v-if="showConfirmPassword" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 3l18 18" />
+                <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
+                <path d="M9.9 4.2A10.6 10.6 0 0 1 12 4c6.5 0 10 8 10 8a18 18 0 0 1-3.2 4.5" />
+                <path d="M6.5 6.5C3.7 8.3 2 12 2 12s3.5 8 10 8a10.8 10.8 0 0 0 5.5-1.5" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
         </div>
         <div v-if="error" class="error-msg">{{ error }}</div>
         <button type="submit" class="btn-primary" :disabled="loading">
-          {{ loading ? '处理中...' : (mode === 'login' ? '登录' : '注册') }}
+          {{ loading ? '处理中...' : (mode === 'login' ? '登录' : '创建账号') }}
+        </button>
+        <button
+          v-if="mode === 'login'"
+          type="button"
+          class="btn-secondary-full"
+          :disabled="loading"
+          @click="mode = 'register'; clearError()"
+        >
+          注册
+        </button>
+        <button
+          v-else
+          type="button"
+          class="btn-secondary-full"
+          :disabled="loading"
+          @click="mode = 'login'; clearError()"
+        >
+          返回登录
         </button>
       </form>
     </section>
@@ -63,8 +138,10 @@ const emit = defineEmits(['login-success'])
 const mode = ref('login')
 const loading = ref(false)
 const error = ref('')
-const form = reactive({ name: '', email: '', password: '' })
+const form = reactive({ name: '', email: '', password: '', confirmPassword: '' })
 const role = ref('student')
+const showPassword = ref(false)
+const showConfirmPassword = ref(false)
 
 function clearError() {
   error.value = ''
@@ -77,6 +154,14 @@ async function handleSubmit() {
   }
   if (mode.value === 'register' && !form.name) {
     error.value = '姓名不能为空'
+    return
+  }
+  if (mode.value === 'register' && !form.confirmPassword) {
+    error.value = '确认密码不能为空'
+    return
+  }
+  if (mode.value === 'register' && form.password !== form.confirmPassword) {
+    error.value = '两次输入的密码不一致'
     return
   }
   loading.value = true

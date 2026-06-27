@@ -1,0 +1,15 @@
+.git/
+.agents/
+.codex/
+backend/.env
+backend/.venv/
+backend/venv/
+backend/__pycache__/
+backend/.pytest_cache/
+backend/tests/
+backend/*.log
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+data/
+*.log
