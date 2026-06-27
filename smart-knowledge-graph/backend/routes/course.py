@@ -21,9 +21,7 @@ def create_course():
     if not data.get("name"):
         return legacy_fail("课程名称不能为空", 400, "VALIDATION_ERROR")
 
-    teacher_id = data.get("teacher_id")
-    if current_role() == "teacher":
-        teacher_id = current_user_id()
+    teacher_id = current_user_id() if current_role() == "teacher" else None
 
     course_data = {
         "id": data.get("id", str(uuid4())),

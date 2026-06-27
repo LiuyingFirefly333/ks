@@ -42,6 +42,8 @@ export const authApi = {
     api.post('/auth/admin/register', { name, email, password }).then(r => r.data),
   loginAdmin: (email, password) =>
     api.post('/auth/admin/login', { email, password }).then(r => r.data),
+  refresh: () => api.post('/auth/refresh').then(r => r.data),
+  logout: () => api.post('/auth/logout').then(r => r.data),
 }
 
 // Courses

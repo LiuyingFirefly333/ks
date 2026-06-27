@@ -15,7 +15,10 @@ function onLoginSuccess(u) {
   user.value = u
 }
 
-function onLogout() {
+async function onLogout() {
+  try {
+    await authApi.logout()
+  } catch {}
   localStorage.removeItem('token')
   localStorage.removeItem('user')
   localStorage.removeItem('role')

@@ -1,10 +1,21 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, jsonify, request
+
 from models.neo4j_client import db
 from routes.security import assert_self_or_roles, audit, current_role, current_user_id, legacy_fail, require_roles
 
 bp = Blueprint("exam", __name__, url_prefix="/api/exam")
 
 QUESTION_TYPES = {"single_choice", "multiple_choice", "true_false", "blank", "subjective"}
+
+
+def _target_student_id(data):
+    if current_role() == "student":
+        return current_user_id(), None
+    student_id = data.get("student_id")
+    if not student_id:
+        return None, legacy_fail("缺少必填字段：student_id", 400, "VALIDATION_ERROR")
+    denied = assert_self_or_roles(student_id, "teacher", "admin")
+    return student_id, denied
 
 
 def _question_payload(data):
@@ -73,18 +84,21 @@ def select_questions():
 @require_roles("student", "teacher", "admin")
 def add_error():
     data = request.json or {}
-    required = ("student_id", "node_id", "question", "correct_answer", "student_answer")
+    required = ("node_id", "question", "correct_answer", "student_answer")
     if not all(k in data for k in required):
         return legacy_fail("缺少必填字段：" + "、".join(required), 400, "VALIDATION_ERROR")
-    denied = assert_self_or_roles(data["student_id"], "teacher", "admin")
+    student_id, denied = _target_student_id(data)
     if denied:
         return denied
     err = db.create_error(
-        data["student_id"], data["node_id"],
-        data["question"], data["correct_answer"],
-        data["student_answer"], data.get("error_reason", ""),
+        student_id,
+        data["node_id"],
+        data["question"],
+        data["correct_answer"],
+        data["student_answer"],
+        data.get("error_reason", ""),
     )
-    audit("exam.error.create", "ErrorRecord", err["id"], {"student_id": data["student_id"], "node_id": data["node_id"]})
+    audit("exam.error.create", "ErrorRecord", err["id"], {"student_id": student_id, "node_id": data["node_id"]})
     return jsonify(err), 201
 
 
@@ -131,13 +145,13 @@ def error_trace(error_id):
 @require_roles("student", "teacher", "admin")
 def generate_test():
     data = request.json or {}
-    if not data.get("student_id"):
-        return legacy_fail("缺少必填字段：student_id", 400, "VALIDATION_ERROR")
-    denied = assert_self_or_roles(data["student_id"], "teacher", "admin")
+    student_id, denied = _target_student_id(data)
     if denied:
         return denied
     paper = db.generate_test_paper(
-        data["student_id"], data.get("course_id"), int(data.get("count", 10)),
+        student_id,
+        data.get("course_id"),
+        int(data.get("count", 10)),
     )
     return jsonify(paper)
 

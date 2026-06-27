@@ -5,7 +5,7 @@ from flask_cors import CORS
 from flask.json.provider import DefaultJSONProvider
 from neo4j.time import Date, DateTime, Time
 
-from config import FLASK_DEBUG, FLASK_HOST, FLASK_PORT
+from config import CORS_ORIGINS, FLASK_DEBUG, FLASK_HOST, FLASK_PORT, SECRET_KEY
 from routes.admin import bp as admin_bp
 from routes.analytics import bp as analytics_bp
 from routes.auth import bp as auth_bp
@@ -34,8 +34,9 @@ class Neo4jJSONProvider(DefaultJSONProvider):
 
 def create_app():
     app = Flask(__name__)
+    app.config["SECRET_KEY"] = SECRET_KEY
     app.json = Neo4jJSONProvider(app)
-    CORS(app)
+    CORS(app, resources={r"/api/*": {"origins": CORS_ORIGINS}})
 
     @app.errorhandler(400)
     def bad_request(error):

@@ -1,14 +1,19 @@
 ﻿from neo4j import GraphDatabase
+from datetime import datetime, timedelta, timezone
 import hashlib
 import secrets
 import uuid
 import json
 import re
-from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+from werkzeug.security import check_password_hash, generate_password_hash
+
+from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, TOKEN_TTL_SECONDS
 
 
 class Neo4jClient:
     """Neo4j 图数据库连接管理"""
+
+    RELATION_TYPES = {"PREREQUISITE", "RELATED_TO"}
 
     def __init__(self):
         self._driver = None
@@ -25,6 +30,13 @@ class Neo4jClient:
         if self._driver:
             self._driver.close()
             self._driver = None
+
+    @classmethod
+    def _safe_relation_type(cls, rel_type: str) -> str:
+        normalized = str(rel_type or "").upper()
+        if normalized not in cls.RELATION_TYPES:
+            raise ValueError("Unsupported relation type")
+        return normalized
 
     # ---- 知识点 CRUD ----
 
@@ -129,6 +141,7 @@ class Neo4jClient:
     # ---- 关系管理 ----
 
     def create_relation(self, source_id: str, target_id: str, rel_type: str, weight: float = 1.0) -> dict:
+        rel_type = self._safe_relation_type(rel_type)
         with self.driver.session() as session:
             result = session.run(
                 f"""
@@ -262,6 +275,7 @@ class Neo4jClient:
         }
 
     def delete_relation(self, source_id: str, target_id: str, rel_type: str) -> bool:
+        rel_type = self._safe_relation_type(rel_type)
         with self.driver.session() as session:
             result = session.run(
                 f"""
@@ -277,6 +291,8 @@ class Neo4jClient:
     def update_relation(self, source_id: str, target_id: str, rel_type: str,
                         new_source_id: str, new_target_id: str, new_rel_type: str,
                         weight: float = 1.0) -> dict | None:
+        rel_type = self._safe_relation_type(rel_type)
+        new_rel_type = self._safe_relation_type(new_rel_type)
         with self.driver.session() as session:
             result = session.run(
                 f"""
@@ -452,7 +468,26 @@ class Neo4jClient:
 
     @staticmethod
     def _hash_password(password: str) -> str:
+        return generate_password_hash(password)
+
+    @staticmethod
+    def _legacy_hash_password(password: str) -> str:
         return hashlib.sha256(password.encode()).hexdigest()
+
+    def _verify_password(self, password: str, stored_hash: str | None) -> tuple[bool, bool]:
+        if not stored_hash:
+            return False, False
+        if stored_hash == self._legacy_hash_password(password):
+            return True, True
+        try:
+            return check_password_hash(stored_hash, password), False
+        except ValueError:
+            return False, False
+
+    @staticmethod
+    def _new_token() -> tuple[str, str]:
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=TOKEN_TTL_SECONDS)
+        return secrets.token_urlsafe(48), expires_at.isoformat()
 
     @staticmethod
     def _user_label(role: str) -> str | None:
@@ -520,32 +555,56 @@ class Neo4jClient:
                 return None
 
             student_id = str(uuid.uuid4())
-            token = secrets.token_hex(32)
+            token, token_expires_at = self._new_token()
             pw_hash = self._hash_password(password)
             result = session.run(
                 """
                 CREATE (s:Student {
                     id: $id, name: $name, email: $email,
-                    password_hash: $pw_hash, token: $token, created_at: datetime()
+                    password_hash: $pw_hash,
+                    token: $token,
+                    token_expires_at: datetime($token_expires_at),
+                    created_at: datetime()
                 })
-                RETURN s { .id, .name, .email, .token, created_at: toString(s.created_at) } as student
+                RETURN s { .id, .name, .email, .token,
+                    token_expires_at: toString(s.token_expires_at),
+                    created_at: toString(s.created_at)
+                } as student
                 """,
-                id=student_id, name=name, email=email, pw_hash=pw_hash, token=token,
+                id=student_id, name=name, email=email, pw_hash=pw_hash,
+                token=token, token_expires_at=token_expires_at,
             )
             return result.single()["student"]
 
     def login_student(self, email: str, password: str) -> dict | None:
-        pw_hash = self._hash_password(password)
         with self.driver.session() as session:
-            token = secrets.token_hex(32)
+            record = session.run(
+                """
+                MATCH (s:Student {email: $email})
+                WHERE coalesce(s.disabled, false) = false
+                RETURN s.id AS id, s.password_hash AS password_hash
+                """,
+                email=email,
+            ).single()
+            if not record:
+                return None
+            valid, needs_upgrade = self._verify_password(password, record["password_hash"])
+            if not valid:
+                return None
+            token, token_expires_at = self._new_token()
             result = session.run(
                 """
-                MATCH (s:Student {email: $email, password_hash: $pw_hash})
-                WHERE coalesce(s.disabled, false) = false
-                SET s.token = $token
-                RETURN s { .id, .name, .email, .token, created_at: toString(s.created_at) } as student
+                MATCH (s:Student {id: $id})
+                SET s.token = $token,
+                    s.token_expires_at = datetime($token_expires_at),
+                    s.password_hash = CASE WHEN $needs_upgrade THEN $password_hash ELSE s.password_hash END
+                RETURN s { .id, .name, .email, .token,
+                    token_expires_at: toString(s.token_expires_at),
+                    created_at: toString(s.created_at)
+                } as student
                 """,
-                email=email, pw_hash=pw_hash, token=token,
+                id=record["id"], token=token, token_expires_at=token_expires_at,
+                needs_upgrade=needs_upgrade, password_hash=self._hash_password(password),
             )
             record = result.single()
             return record["student"] if record else None
@@ -556,7 +615,12 @@ class Neo4jClient:
                 """
                 MATCH (s:Student {token: $token})
                 WHERE coalesce(s.disabled, false) = false
-                RETURN s { .id, .name, .email, created_at: toString(s.created_at) } as student
+                  AND s.token_expires_at IS NOT NULL
+                  AND s.token_expires_at > datetime()
+                RETURN s { .id, .name, .email,
+                    token_expires_at: toString(s.token_expires_at),
+                    created_at: toString(s.created_at)
+                } as student
                 """,
                 token=token,
             )
@@ -574,32 +638,56 @@ class Neo4jClient:
                 return None
 
             teacher_id = str(uuid.uuid4())
-            token = secrets.token_hex(32)
+            token, token_expires_at = self._new_token()
             pw_hash = self._hash_password(password)
             result = session.run(
                 """
                 CREATE (t:Teacher {
                     id: $id, name: $name, email: $email,
-                    password_hash: $pw_hash, token: $token, created_at: datetime()
+                    password_hash: $pw_hash,
+                    token: $token,
+                    token_expires_at: datetime($token_expires_at),
+                    created_at: datetime()
                 })
-                RETURN t { .id, .name, .email, .token, created_at: toString(t.created_at) } as teacher
+                RETURN t { .id, .name, .email, .token,
+                    token_expires_at: toString(t.token_expires_at),
+                    created_at: toString(t.created_at)
+                } as teacher
                 """,
-                id=teacher_id, name=name, email=email, pw_hash=pw_hash, token=token,
+                id=teacher_id, name=name, email=email, pw_hash=pw_hash,
+                token=token, token_expires_at=token_expires_at,
             )
             return result.single()["teacher"]
 
     def login_teacher(self, email: str, password: str) -> dict | None:
-        pw_hash = self._hash_password(password)
         with self.driver.session() as session:
-            token = secrets.token_hex(32)
+            record = session.run(
+                """
+                MATCH (t:Teacher {email: $email})
+                WHERE coalesce(t.disabled, false) = false
+                RETURN t.id AS id, t.password_hash AS password_hash
+                """,
+                email=email,
+            ).single()
+            if not record:
+                return None
+            valid, needs_upgrade = self._verify_password(password, record["password_hash"])
+            if not valid:
+                return None
+            token, token_expires_at = self._new_token()
             result = session.run(
                 """
-                MATCH (t:Teacher {email: $email, password_hash: $pw_hash})
-                WHERE coalesce(t.disabled, false) = false
-                SET t.token = $token
-                RETURN t { .id, .name, .email, .token, created_at: toString(t.created_at) } as teacher
+                MATCH (t:Teacher {id: $id})
+                SET t.token = $token,
+                    t.token_expires_at = datetime($token_expires_at),
+                    t.password_hash = CASE WHEN $needs_upgrade THEN $password_hash ELSE t.password_hash END
+                RETURN t { .id, .name, .email, .token,
+                    token_expires_at: toString(t.token_expires_at),
+                    created_at: toString(t.created_at)
+                } as teacher
                 """,
-                email=email, pw_hash=pw_hash, token=token,
+                id=record["id"], token=token, token_expires_at=token_expires_at,
+                needs_upgrade=needs_upgrade, password_hash=self._hash_password(password),
             )
             record = result.single()
             return record["teacher"] if record else None
@@ -610,7 +698,12 @@ class Neo4jClient:
                 """
                 MATCH (t:Teacher {token: $token})
                 WHERE coalesce(t.disabled, false) = false
-                RETURN t { .id, .name, .email, created_at: toString(t.created_at) } as teacher
+                  AND t.token_expires_at IS NOT NULL
+                  AND t.token_expires_at > datetime()
+                RETURN t { .id, .name, .email,
+                    token_expires_at: toString(t.token_expires_at),
+                    created_at: toString(t.created_at)
+                } as teacher
                 """,
                 token=token,
             )
@@ -2658,24 +2751,53 @@ class Neo4jClient:
             existing = session.run("MATCH (a:Admin {email: $email}) RETURN a LIMIT 1", email=email).single()
             if existing: return None
             aid = str(uuid.uuid4())
-            token = secrets.token_hex(32)
+            token, token_expires_at = self._new_token()
             pw_hash = self._hash_password(password)
             session.run(
                 """CREATE (a:Admin {id: $id, name: $name, email: $email,
-                password_hash: $pw, token: $token, created_at: datetime()})""",
-                id=aid, name=name, email=email, pw=pw_hash, token=token,
+                password_hash: $pw,
+                token: $token,
+                token_expires_at: datetime($token_expires_at),
+                created_at: datetime()})""",
+                id=aid, name=name, email=email, pw=pw_hash,
+                token=token, token_expires_at=token_expires_at,
             )
-            return {"id": aid, "name": name, "email": email, "token": token}
+            return {
+                "id": aid,
+                "name": name,
+                "email": email,
+                "token": token,
+                "token_expires_at": token_expires_at,
+            }
 
     def login_admin(self, email: str, password: str) -> dict | None:
-        pw_hash = self._hash_password(password)
         with self.driver.session() as session:
-            token = secrets.token_hex(32)
-            result = session.run(
-                """MATCH (a:Admin {email: $email, password_hash: $pw})
+            record = session.run(
+                """
+                MATCH (a:Admin {email: $email})
                 WHERE coalesce(a.disabled, false) = false
-                SET a.token = $token RETURN a { .id, .name, .email, .token } as admin""",
-                email=email, pw=pw_hash, token=token,
+                RETURN a.id AS id, a.password_hash AS password_hash
+                """,
+                email=email,
+            ).single()
+            if not record:
+                return None
+            valid, needs_upgrade = self._verify_password(password, record["password_hash"])
+            if not valid:
+                return None
+            token, token_expires_at = self._new_token()
+            result = session.run(
+                """
+                MATCH (a:Admin {id: $id})
+                SET a.token = $token,
+                    a.token_expires_at = datetime($token_expires_at),
+                    a.password_hash = CASE WHEN $needs_upgrade THEN $password_hash ELSE a.password_hash END
+                RETURN a { .id, .name, .email, .token,
+                    token_expires_at: toString(a.token_expires_at)
+                } as admin
+                """,
+                id=record["id"], token=token, token_expires_at=token_expires_at,
+                needs_upgrade=needs_upgrade, password_hash=self._hash_password(password),
             )
             rec = result.single()
             return rec["admin"] if rec else None
@@ -2686,7 +2808,12 @@ class Neo4jClient:
                 """
                 MATCH (a:Admin {token: $token})
                 WHERE coalesce(a.disabled, false) = false
-                RETURN a { .id, .name, .email, .avatar_url, .nickname, .bio, created_at: toString(a.created_at) } as admin
+                  AND a.token_expires_at IS NOT NULL
+                  AND a.token_expires_at > datetime()
+                RETURN a { .id, .name, .email, .avatar_url, .nickname, .bio,
+                    token_expires_at: toString(a.token_expires_at),
+                    created_at: toString(a.created_at)
+                } as admin
                 """,
                 token=token,
             ).single()
@@ -2706,6 +2833,51 @@ class Neo4jClient:
         if admin:
             return {"role": "admin", "user": admin}
         return None
+
+    def refresh_user_token(self, token: str) -> dict | None:
+        auth_user = self.get_user_by_token(token)
+        if not auth_user:
+            return None
+        label = self._user_label(auth_user["role"])
+        user_id = auth_user["user"]["id"]
+        new_token, token_expires_at = self._new_token()
+        with self.driver.session() as session:
+            result = session.run(
+                f"""
+                MATCH (u:{label} {{id: $id, token: $token}})
+                WHERE coalesce(u.disabled, false) = false
+                SET u.token = $new_token,
+                    u.token_expires_at = datetime($token_expires_at)
+                RETURN u {{ .id, .name, .email, .token,
+                    token_expires_at: toString(u.token_expires_at)
+                }} as user
+                """,
+                id=user_id,
+                token=token,
+                new_token=new_token,
+                token_expires_at=token_expires_at,
+            )
+            record = result.single()
+            if not record:
+                return None
+            return {"role": auth_user["role"], "user": record["user"]}
+
+    def revoke_user_token(self, token: str) -> bool:
+        if not token:
+            return False
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (u)
+                WHERE (u:Student OR u:Teacher OR u:Admin)
+                  AND u.token = $token
+                SET u.token = null,
+                    u.token_expires_at = null
+                RETURN count(u) AS revoked
+                """,
+                token=token,
+            ).single()
+            return result["revoked"] > 0 if result else False
 
     def get_user_profile(self, role: str, user_id: str) -> dict | None:
         label = {"student": "Student", "teacher": "Teacher", "admin": "Admin"}.get(role)

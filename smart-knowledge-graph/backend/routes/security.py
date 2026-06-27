@@ -1,6 +1,7 @@
 from functools import wraps
 from flask import g, jsonify, request
 from models.neo4j_client import db
+from services.auth_service import auth_service
 
 
 ROLE_LABELS = {
@@ -62,7 +63,7 @@ def resolve_current_user():
     g.current_role = None
     if not token:
         return None
-    auth_user = db.get_user_by_token(token)
+    auth_user = auth_service.resolve_token(token)
     if auth_user:
         g.auth_user = auth_user
         g.current_user = auth_user["user"]
