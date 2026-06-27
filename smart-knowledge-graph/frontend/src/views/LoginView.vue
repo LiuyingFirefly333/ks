@@ -2,7 +2,16 @@
   <div class="login-wrapper">
     <section class="login-hero">
       <div class="login-brand">
-        <span class="brand-mark large">KG</span>
+        <span class="brand-mark large" aria-hidden="true">
+          <svg class="brand-logo-icon" viewBox="0 0 24 24">
+            <circle cx="6" cy="8" r="2.4" />
+            <circle cx="18" cy="7" r="2.4" />
+            <circle cx="12" cy="18" r="2.6" />
+            <path d="M8.3 7.8l7.4-.6" />
+            <path d="M7.3 10l3.8 5.8" />
+            <path d="M16.8 9.2l-3.6 6.5" />
+          </svg>
+        </span>
         <span>智能知识图谱学习系统</span>
       </div>
       <h1>把知识点、学情和 AI 答疑放在一张图里。</h1>
@@ -12,6 +21,34 @@
         <span>AI 问答</span>
         <span>路径推荐</span>
         <span>错题溯源</span>
+      </div>
+
+      <div class="login-visual" aria-hidden="true">
+        <div class="visual-grid"></div>
+        <span class="visual-link link-one"></span>
+        <span class="visual-link link-two"></span>
+        <span class="visual-link link-three"></span>
+        <span class="visual-node node-main">
+          <svg class="visual-node-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="6" cy="8" r="2.4" />
+            <circle cx="18" cy="7" r="2.4" />
+            <circle cx="12" cy="18" r="2.6" />
+            <path d="M8.3 7.8l7.4-.6" />
+            <path d="M7.3 10l3.8 5.8" />
+            <path d="M16.8 9.2l-3.6 6.5" />
+          </svg>
+        </span>
+        <span class="visual-node node-ai">AI</span>
+        <span class="visual-node node-path">路径</span>
+        <span class="visual-node node-test">练习</span>
+        <div class="visual-card visual-card-left">
+          <strong>学习轨迹</strong>
+          <span></span>
+        </div>
+        <div class="visual-card visual-card-right">
+          <strong>知识关联</strong>
+          <span></span>
+        </div>
       </div>
     </section>
 

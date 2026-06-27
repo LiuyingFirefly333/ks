@@ -1,6 +1,7 @@
 <template>
   <div ref="container" class="graph-wrapper">
     <div class="graph-toolbar-top graph-layout-toolbar">
+      <span class="graph-toolbar-label">视图</span>
       <div class="graph-mode-switch">
         <button :class="{ active: layoutMode === 'force' }" @click="setLayout('force')" title="力导向布局">
           力导向
@@ -9,11 +10,6 @@
           分层
         </button>
       </div>
-      <span class="toolbar-sep"></span>
-      <span class="graph-stat-chip">{{ props.nodes.length }} 点</span>
-      <span class="graph-stat-chip">{{ props.links.length }} 边</span>
-      <span class="toolbar-sep"></span>
-      <button @click="fitToScreen" title="适应画布">适应</button>
     </div>
 
     <div class="graph-mode-label">

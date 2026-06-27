@@ -2,16 +2,20 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="topbar-brand">
-        <span class="brand-mark">KG</span>
+        <span class="brand-mark" aria-hidden="true">
+          <svg class="brand-logo-icon" viewBox="0 0 24 24">
+            <circle cx="6" cy="8" r="2.4" />
+            <circle cx="18" cy="7" r="2.4" />
+            <circle cx="12" cy="18" r="2.6" />
+            <path d="M8.3 7.8l7.4-.6" />
+            <path d="M7.3 10l3.8 5.8" />
+            <path d="M16.8 9.2l-3.6 6.5" />
+          </svg>
+        </span>
         <div>
           <div class="brand-text">智能知识图谱学习系统</div>
           <div class="brand-subtitle">Knowledge Graph Learning Workspace</div>
         </div>
-      </div>
-
-      <div class="topbar-center workspace-title">
-        <span>{{ currentNavLabel }}</span>
-        <small>{{ currentNavHint }}</small>
       </div>
 
       <div class="topbar-user">
@@ -46,7 +50,7 @@
                 :title="item.hint"
                 @click="onNavClick(item.key)"
               >
-                <span class="sidebar-nav-icon">{{ item.icon }}</span>
+                <span class="sidebar-nav-icon" v-html="item.icon"></span>
                 <span>
                   <b>{{ item.label }}</b>
                   <small>{{ item.hint }}</small>
@@ -56,7 +60,16 @@
           </nav>
         </section>
 
-        <section class="sidebar-section next-action-section">
+        <section v-if="showNextAction" class="sidebar-section next-action-section">
+          <button
+            type="button"
+            class="next-action-close"
+            aria-label="关闭下一步建议"
+            title="关闭"
+            @click="showNextAction = false"
+          >
+            ×
+          </button>
           <div class="course-sidebar-head">
             <div>
               <span class="sidebar-eyebrow">下一步</span>
@@ -69,53 +82,91 @@
           </button>
         </section>
 
-        <section class="sidebar-section course-section">
-          <div class="course-sidebar-head">
-          <div>
-            <span class="sidebar-eyebrow">课程</span>
-            <h2>学习课程</h2>
-          </div>
-          <span class="course-count">{{ courses.length }}</span>
-          </div>
-
-          <div v-if="!courses.length" class="empty-state compact">暂无课程</div>
-
-          <div v-else class="course-list">
-            <button
-              v-for="c in courses"
-              :key="c.id"
-              class="course-item"
-              :class="{ active: currentCourseId === c.id }"
-              :title="c.name"
-              @click="selectCourse(c.id)"
-            >
-              <span class="course-name">{{ c.name }}</span>
-              <span v-if="currentCourseId === c.id" class="course-status">当前</span>
-            </button>
-          </div>
-        </section>
-
-        <div v-if="user?.role === 'teacher'" class="sidebar-controls">
-          <div class="form-row">
-            <label>班级视图</label>
-            <select v-model="currentClassId" @change="onClassChange" class="sidebar-select">
-              <option value="">全部班级</option>
-              <option v-for="c in classes" :key="c.id" :value="c.id">{{ c.name }}</option>
-            </select>
-          </div>
-
-          <button
-            class="soft-button full-width"
-            :class="{ active: heatmapMode }"
-            @click="toggleHeatmap"
-          >
-            {{ heatmapMode ? '关闭热力图' : '班级热力图' }}
-          </button>
-        </div>
       </aside>
 
       <main class="main-content" :class="{ 'workspace-main': activeNav !== 'graph' }">
         <div v-if="activeNav === 'graph'" class="graph-stage">
+          <div class="graph-course-switcher" :class="{ 'has-class-view': user?.role === 'teacher' }">
+            <div class="top-course-switcher">
+              <span class="top-course-kicker">当前课程</span>
+              <span class="top-course-select-wrap">
+                <button
+                  type="button"
+                  class="top-course-trigger"
+                  :disabled="!courses.length"
+                  aria-label="切换课程"
+                  aria-haspopup="listbox"
+                  :aria-expanded="courseMenuOpen"
+                  @click="courseMenuOpen = !courseMenuOpen; classMenuOpen = false"
+                >
+                  <span>{{ currentCourseName }}</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                <div v-if="courseMenuOpen" class="top-course-menu" role="listbox">
+                  <button
+                    v-for="course in courses"
+                    :key="course.id"
+                    type="button"
+                    class="top-course-option"
+                    :class="{ active: currentCourseId === course.id }"
+                    role="option"
+                    :aria-selected="currentCourseId === course.id"
+                    @click="chooseCourse(course.id)"
+                  >
+                    <span>{{ course.name }}</span>
+                    <b v-if="currentCourseId === course.id">当前</b>
+                  </button>
+                </div>
+              </span>
+            </div>
+
+            <div v-if="user?.role === 'teacher'" class="top-course-switcher top-class-switcher">
+              <span class="top-course-kicker">班级视图</span>
+              <span class="top-course-select-wrap">
+                <button
+                  type="button"
+                  class="top-course-trigger"
+                  aria-label="切换班级视图"
+                  aria-haspopup="listbox"
+                  :aria-expanded="classMenuOpen"
+                  @click="classMenuOpen = !classMenuOpen; courseMenuOpen = false"
+                >
+                  <span>{{ currentClassName }}</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                <div v-if="classMenuOpen" class="top-course-menu" role="listbox">
+                  <button
+                    type="button"
+                    class="top-course-option"
+                    :class="{ active: !currentClassId }"
+                    role="option"
+                    :aria-selected="!currentClassId"
+                    @click="chooseClass('')"
+                  >
+                    <span>全部班级</span>
+                    <b v-if="!currentClassId">当前</b>
+                  </button>
+                  <button
+                    v-for="c in classes"
+                    :key="c.id"
+                    type="button"
+                    class="top-course-option"
+                    :class="{ active: currentClassId === c.id }"
+                    role="option"
+                    :aria-selected="currentClassId === c.id"
+                    @click="chooseClass(c.id)"
+                  >
+                    <span>{{ c.name }}</span>
+                    <b v-if="currentClassId === c.id">当前</b>
+                  </button>
+                </div>
+              </span>
+            </div>
+          </div>
           <KnowledgeGraph
             ref="graphRef"
             :nodes="nodes"
@@ -164,6 +215,11 @@
               title="导出图谱"
               @click="exportMenuOpen = !exportMenuOpen"
             >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v11" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M5 21h14" />
+              </svg>
               导出图谱
             </button>
             <div v-if="exportMenuOpen" class="graph-export-menu">
@@ -172,9 +228,35 @@
               <button @click="exportGraph('csv')">CSV 表格</button>
             </div>
           </div>
+          <label
+            v-if="user?.role === 'teacher'"
+            class="graph-heatmap-switch"
+            :class="{ active: heatmapMode }"
+          >
+            <span>班级热力图</span>
+            <input
+              type="checkbox"
+              :checked="heatmapMode"
+              aria-label="切换班级热力图"
+              @change="toggleHeatmap"
+            />
+            <i aria-hidden="true"></i>
+          </label>
         </div>
 
         <div v-if="activeNav === 'graph'" class="graph-zoom-tools">
+          <button title="适应画布" aria-label="适应画布" @click="fitGraph">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 3H3v5" />
+              <path d="M16 3h5v5" />
+              <path d="M8 21H3v-5" />
+              <path d="M16 21h5v-5" />
+              <path d="M3 3l6 6" />
+              <path d="M21 3l-6 6" />
+              <path d="M3 21l6-6" />
+              <path d="M21 21l-6-6" />
+            </svg>
+          </button>
           <button title="放大" aria-label="放大图谱" @click="zoomIn">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <circle cx="11" cy="11" r="7" />
@@ -192,16 +274,22 @@
           </button>
         </div>
 
-        <div v-if="activeNav === 'graph'" class="floating-legend">
-          <div class="legend-title">图例</div>
-          <div class="legend-row"><span class="ldot" style="background:#2563eb"></span>知识点</div>
-          <div class="legend-row"><span class="ldot" style="background:#16a34a"></span>熟练</div>
-          <div class="legend-row"><span class="ldot" style="background:#f59e0b"></span>一般</div>
-          <div class="legend-row"><span class="ldot" style="background:#f97316"></span>薄弱</div>
-          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#ef4444"></span>最短路径</div>
-          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#16a34a"></span>最轻松</div>
-          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#2563eb"></span>最扎实</div>
-          <div class="legend-row"><span style="display:inline-block;width:18px;height:0;border-top:2px dashed #94a3b8"></span>相关概念</div>
+        <div v-if="activeNav === 'graph'" class="graph-legend-area">
+          <div class="floating-legend">
+            <div class="legend-title">图例</div>
+            <div class="legend-row"><span class="ldot" style="background:#2563eb"></span>知识点</div>
+            <div class="legend-row"><span class="ldot" style="background:#16a34a"></span>熟练</div>
+            <div class="legend-row"><span class="ldot" style="background:#f59e0b"></span>一般</div>
+            <div class="legend-row"><span class="ldot" style="background:#f97316"></span>薄弱</div>
+            <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#ef4444"></span>最短路径</div>
+            <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#16a34a"></span>最轻松</div>
+            <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#2563eb"></span>最扎实</div>
+            <div class="legend-row"><span style="display:inline-block;width:18px;height:0;border-top:2px dashed #94a3b8"></span>相关概念</div>
+          </div>
+          <div class="graph-floating-stats" aria-label="图谱统计">
+            <span>{{ nodes.length }} 点</span>
+            <span>{{ links.length }} 边</span>
+          </div>
         </div>
 
         <section v-if="activeNav !== 'graph'" class="workspace-page">
@@ -450,20 +538,40 @@ const canEditGraph = computed(() => props.user?.role === 'teacher' || props.user
 const displayName = computed(() => props.user?.nickname || props.user?.name || props.user?.email || '未命名用户')
 const userInitials = computed(() => String(displayName.value || 'U').trim().slice(0, 2).toUpperCase())
 
+function navIcon(content) {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${content}</svg>`
+}
+
+const NAV_ICONS = {
+  graph: navIcon('<circle cx="6" cy="7" r="2.2" /><circle cx="18" cy="6" r="2.2" /><circle cx="12" cy="18" r="2.2" /><path d="M8 8l8-1" /><path d="M7 9l4 7" /><path d="M17 8l-4 8" />'),
+  browse: navIcon('<rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18" /><path d="M7 7h.01" /><path d="M10 7h.01" />'),
+  qa: navIcon('<path d="M4 5h16v10H8l-4 4z" /><path d="M8 9h8" /><path d="M8 12h5" />'),
+  path: navIcon('<circle cx="5" cy="19" r="2" /><circle cx="19" cy="5" r="2" /><path d="M7 19h3a4 4 0 0 0 0-8h4a4 4 0 0 0 4-4" />'),
+  errors: navIcon('<path d="M12 3l9 16H3z" /><path d="M12 9v4" /><path d="M12 17h.01" />'),
+  paper: navIcon('<path d="M6 3h9l3 3v15H6z" /><path d="M14 3v4h4" /><path d="M9 12h6" /><path d="M9 16h4" />'),
+  resources: navIcon('<path d="M4 6h6l2 2h8v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /><path d="M4 10h16" />'),
+  teaching: navIcon('<path d="M4 5h16v11H4z" /><path d="M8 21l4-5 4 5" /><path d="M12 16v5" /><path d="M8 9h8" /><path d="M8 12h5" />'),
+  classReport: navIcon('<path d="M4 20V4" /><path d="M4 20h16" /><path d="M8 16v-5" /><path d="M12 16V8" /><path d="M16 16v-8" />'),
+  review: navIcon('<path d="M5 4h14v16H5z" /><path d="M8 9l2 2 5-5" /><path d="M8 15h8" />'),
+  manage: navIcon('<path d="M4 6h10" /><path d="M18 6h2" /><circle cx="16" cy="6" r="2" /><path d="M4 12h2" /><path d="M10 12h10" /><circle cx="8" cy="12" r="2" /><path d="M4 18h12" /><path d="M20 18h0" /><circle cx="18" cy="18" r="2" />'),
+  admin: navIcon('<rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 15l3-3 3 2 4-6" /><path d="M7 18h10" />'),
+  profile: navIcon('<circle cx="12" cy="8" r="4" /><path d="M4 20a8 8 0 0 1 16 0" />'),
+}
+
 const NAV_DEFS = {
-  graph: { key: 'graph', icon: 'KG', label: '知识图谱', hint: '全局关系视图' },
-  browse: { key: 'browse', icon: 'BR', label: '知识浏览', hint: '搜索与筛选节点' },
-  qa: { key: 'qa', icon: 'AI', label: 'AI 问答', hint: '结合图谱上下文答疑' },
-  path: { key: 'path', icon: 'PT', label: '学习路径', hint: '推荐补习路线' },
-  errors: { key: 'errors', icon: 'ER', label: '错题本', hint: '错题溯源分析' },
-  paper: { key: 'paper', icon: 'EX', label: '智能组卷', hint: '薄弱点专项训练' },
-  resources: { key: 'resources', icon: 'RS', label: '资源库', hint: '资源管理与批量挂载' },
-  teaching: { key: 'teaching', icon: 'TR', label: '备课教研', hint: '课件上传、抽取建图与命题统计' },
-  classReport: { key: 'classReport', icon: 'CR', label: '班级报告', hint: '错题统计与精准教学' },
-  review: { key: 'review', icon: 'RV', label: '主观题批阅', hint: '批阅待处理主观题' },
-  manage: { key: 'manage', icon: 'MG', label: '知识管理', hint: '维护节点与关系' },
-  admin: { key: 'admin', icon: 'AD', label: '数据看板', hint: '平台与知识库运营' },
-  profile: { key: 'profile', icon: 'ME', label: '个人中心', hint: '资料编辑与学习概览' },
+  graph: { key: 'graph', icon: NAV_ICONS.graph, label: '知识图谱', hint: '全局关系视图' },
+  browse: { key: 'browse', icon: NAV_ICONS.browse, label: '知识浏览', hint: '搜索与筛选节点' },
+  qa: { key: 'qa', icon: NAV_ICONS.qa, label: 'AI 问答', hint: '结合图谱上下文答疑' },
+  path: { key: 'path', icon: NAV_ICONS.path, label: '学习路径', hint: '推荐补习路线' },
+  errors: { key: 'errors', icon: NAV_ICONS.errors, label: '错题本', hint: '错题溯源分析' },
+  paper: { key: 'paper', icon: NAV_ICONS.paper, label: '智能组卷', hint: '薄弱点专项训练' },
+  resources: { key: 'resources', icon: NAV_ICONS.resources, label: '资源库', hint: '资源管理与批量挂载' },
+  teaching: { key: 'teaching', icon: NAV_ICONS.teaching, label: '备课教研', hint: '课件上传、抽取建图与命题统计' },
+  classReport: { key: 'classReport', icon: NAV_ICONS.classReport, label: '班级报告', hint: '错题统计与精准教学' },
+  review: { key: 'review', icon: NAV_ICONS.review, label: '主观题批阅', hint: '批阅待处理主观题' },
+  manage: { key: 'manage', icon: NAV_ICONS.manage, label: '知识管理', hint: '维护节点与关系' },
+  admin: { key: 'admin', icon: NAV_ICONS.admin, label: '数据看板', hint: '平台与知识库运营' },
+  profile: { key: 'profile', icon: NAV_ICONS.profile, label: '个人中心', hint: '资料编辑与学习概览' },
 }
 
 const ROLE_NAV_KEYS = {
@@ -536,6 +644,7 @@ const pathRecommendRef = ref(null)
 const activeNav = ref('graph')
 const selectedNode = ref(null)
 const selectedLink = ref(null)
+const showNextAction = ref(true)
 const { courses, currentCourseId, loadCourses, selectCourse: setCourse } = useCourses()
 const userId = computed(() => props.user?.id || '')
 const {
@@ -573,6 +682,8 @@ const {
 const focusedNode = ref(null)
 const graphEditMode = ref(false)
 const exportMenuOpen = ref(false)
+const courseMenuOpen = ref(false)
+const classMenuOpen = ref(false)
 const relationSourceId = ref('')
 const relationDraftType = ref('PREREQUISITE')
 const relationDraftWeight = ref(1)
@@ -582,6 +693,17 @@ const form = ref({ name: '', category: '', difficulty: 1, estimated_time: 0, des
 const relSource = ref('')
 const relTarget = ref('')
 const relType = ref('PREREQUISITE')
+
+const currentCourseName = computed(() => {
+  const course = courses.value.find(item => item.id === currentCourseId.value)
+  if (course) return course.name
+  return courses.value.length ? '请选择课程' : '暂无课程'
+})
+
+const currentClassName = computed(() => {
+  if (!currentClassId.value) return '全部班级'
+  return classes.value.find(item => item.id === currentClassId.value)?.name || '全部班级'
+})
 
 function displayCategory(cat) {
   if (!cat) return '未分类'
@@ -632,6 +754,8 @@ function switchNav(key) {
   if (activeNav.value === 'graph' && nextKey !== 'graph') recordGraphViewport()
   activeNav.value = nextKey
   exportMenuOpen.value = false
+  courseMenuOpen.value = false
+  classMenuOpen.value = false
 }
 
 function onNavClick(key) {
@@ -641,6 +765,19 @@ function onNavClick(key) {
 async function selectCourse(courseId) {
   recordGraphViewport()
   await setCourse(courseId, onCourseChange)
+}
+
+async function chooseCourse(courseId) {
+  courseMenuOpen.value = false
+  classMenuOpen.value = false
+  await selectCourse(courseId)
+}
+
+async function chooseClass(classId) {
+  currentClassId.value = classId
+  classMenuOpen.value = false
+  courseMenuOpen.value = false
+  await onClassChange()
 }
 
 async function onCourseChange() {
@@ -766,6 +903,10 @@ async function onTrainingSubmitted() {
   if (selectedNode.value && pathRecommendRef.value?.fetchPath) {
     await pathRecommendRef.value.fetchPath(selectedNode.value.id)
   }
+}
+
+function fitGraph() {
+  if (graphRef.value?.fitToScreen) graphRef.value.fitToScreen()
 }
 
 function zoomIn() {
