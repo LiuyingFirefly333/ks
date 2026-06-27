@@ -122,6 +122,7 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { resourceApi } from '../api/index.js'
+import { useToast } from '../composables/useToast.js'
 
 const props = defineProps({
   courseId: { type: String, default: '' },
@@ -149,6 +150,7 @@ const resources = ref([])
 const selectedResourceIds = ref([])
 const selectedNodeIds = ref([])
 const tagText = ref('')
+const { showToast } = useToast()
 
 const filters = reactive({
   q: '',
@@ -205,7 +207,7 @@ async function createResource() {
     resetForm()
     await fetchResources()
   } catch (err) {
-    alert(err.normalizedMessage || '创建资源失败')
+    showToast(err.normalizedMessage || '创建资源失败', 'error')
   } finally {
     loading.value = false
   }
@@ -241,7 +243,7 @@ async function updateStatus(resource, status) {
     await resourceApi.update(resource.id, { status })
     resource.status = status
   } catch (err) {
-    alert(err.normalizedMessage || '更新状态失败')
+    showToast(err.normalizedMessage || '更新状态失败', 'error')
   }
 }
 
@@ -252,7 +254,7 @@ async function deleteResource(resource) {
     resources.value = resources.value.filter(item => item.id !== resource.id)
     selectedResourceIds.value = selectedResourceIds.value.filter(id => id !== resource.id)
   } catch (err) {
-    alert(err.normalizedMessage || '删除资源失败')
+    showToast(err.normalizedMessage || '删除资源失败', 'error')
   }
 }
 
@@ -261,7 +263,7 @@ async function batchAttach() {
     await resourceApi.batchAttach(selectedResourceIds.value, selectedNodeIds.value)
     await fetchResources()
   } catch (err) {
-    alert(err.normalizedMessage || '批量挂载失败')
+    showToast(err.normalizedMessage || '批量挂载失败', 'error')
   }
 }
 
@@ -270,7 +272,7 @@ async function batchPublish() {
     await resourceApi.batchStatus(selectedResourceIds.value, 'published')
     await fetchResources()
   } catch (err) {
-    alert(err.normalizedMessage || '批量上线失败')
+    showToast(err.normalizedMessage || '批量上线失败', 'error')
   }
 }
 
@@ -280,9 +282,9 @@ async function migrateLegacy() {
   try {
     const result = await resourceApi.migrateLegacy(props.courseId)
     await fetchResources()
-    alert(`迁移完成：${result.nodes || 0} 个知识点，${result.resources || 0} 个资源`)
+    showToast(`迁移完成：${result.nodes || 0} 个知识点，${result.resources || 0} 个资源`, 'success')
   } catch (err) {
-    alert(err.normalizedMessage || '迁移失败')
+    showToast(err.normalizedMessage || '迁移失败', 'error')
   } finally {
     loading.value = false
   }

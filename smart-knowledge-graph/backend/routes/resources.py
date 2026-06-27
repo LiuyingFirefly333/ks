@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from models.neo4j_client import db
-from routes.security import audit, current_role, current_user_id, legacy_fail, require_roles
+from routes.security import audit, can_access_course, can_access_node, current_role, current_user_id, legacy_fail, require_roles
 
 bp = Blueprint("resources", __name__, url_prefix="/api/resources")
 
@@ -17,10 +17,10 @@ def _clean_tags(value):
 
 def _can_edit_course(course_id):
     role = current_role()
-    if role == "admin" or not course_id:
+    if role == "admin":
         return True
     if role == "teacher":
-        return db.teacher_owns_course(current_user_id(), course_id)
+        return bool(course_id and db.teacher_owns_course(current_user_id(), course_id))
     return False
 
 
@@ -31,6 +31,26 @@ def _can_edit_nodes(node_ids):
     if role != "teacher":
         return False
     return all(db.can_teacher_edit_node(current_user_id(), node_id) for node_id in node_ids if node_id)
+
+
+def _can_edit_resource(resource_id):
+    role = current_role()
+    if role == "admin":
+        return True
+    if role == "teacher":
+        return db.teacher_can_edit_resource(current_user_id(), resource_id)
+    return False
+
+
+def _can_view_resource(resource_id):
+    role = current_role()
+    if role == "admin":
+        return True
+    if role == "teacher":
+        return db.teacher_can_edit_resource(current_user_id(), resource_id)
+    if role == "student":
+        return db.student_can_access_resource(current_user_id(), resource_id)
+    return False
 
 
 def _resource_payload(data):
@@ -60,12 +80,23 @@ def _resource_payload(data):
 @bp.route("", methods=["GET"])
 @require_roles("student", "teacher", "admin")
 def list_resources():
+    course_id = request.args.get("course_id")
+    knowledge_id = request.args.get("knowledge_id", "")
+    if course_id and not can_access_course(course_id):
+        return legacy_fail("无权访问该课程资源", 403, "FORBIDDEN")
+    if knowledge_id and not can_access_node(knowledge_id):
+        return legacy_fail("无权访问该知识点资源", 403, "FORBIDDEN")
+    if not course_id and not knowledge_id and current_role() != "admin":
+        return legacy_fail("请先选择可访问课程或知识点", 400, "SCOPE_REQUIRED")
+    status = request.args.get("status", "")
+    if current_role() == "student":
+        status = "published"
     resources = db.list_resources(
-        course_id=request.args.get("course_id"),
+        course_id=course_id,
         q=request.args.get("q", ""),
         resource_type=request.args.get("type", ""),
-        status=request.args.get("status", ""),
-        knowledge_id=request.args.get("knowledge_id", ""),
+        status=status,
+        knowledge_id=knowledge_id,
     )
     return jsonify(resources)
 
@@ -73,9 +104,14 @@ def list_resources():
 @bp.route("/knowledge/<node_id>", methods=["GET"])
 @require_roles("student", "teacher", "admin")
 def list_knowledge_resources(node_id):
+    if not can_access_node(node_id):
+        return legacy_fail("无权访问该知识点资源", 403, "FORBIDDEN")
+    course_id = request.args.get("course_id")
+    if course_id and not can_access_course(course_id):
+        return legacy_fail("无权访问该课程资源", 403, "FORBIDDEN")
     resources = db.list_resources(
-        course_id=request.args.get("course_id"),
-        status=request.args.get("status", ""),
+        course_id=course_id,
+        status="published" if current_role() == "student" else request.args.get("status", ""),
         knowledge_id=node_id,
     )
     return jsonify(resources)
@@ -91,6 +127,8 @@ def create_resource():
         return legacy_fail(str(exc), 400, "VALIDATION_ERROR")
     if not payload["title"]:
         return legacy_fail("资源标题不能为空", 400, "VALIDATION_ERROR")
+    if current_role() == "teacher" and not payload.get("course_id"):
+        return legacy_fail("教师创建资源时必须选择课程", 400, "COURSE_REQUIRED")
     if not _can_edit_course(payload.get("course_id")):
         return legacy_fail("无权在该课程下创建资源", 403, "FORBIDDEN")
     if not _can_edit_nodes(payload.get("node_ids") or []):
@@ -106,12 +144,16 @@ def get_resource(resource_id):
     resource = db.get_resource(resource_id)
     if not resource:
         return legacy_fail("资源不存在", 404, "RESOURCE_NOT_FOUND")
+    if not _can_view_resource(resource_id):
+        return legacy_fail("无权访问该资源", 403, "FORBIDDEN")
     return jsonify(resource)
 
 
 @bp.route("/<resource_id>", methods=["PUT"])
 @require_roles("teacher", "admin")
 def update_resource(resource_id):
+    if not _can_edit_resource(resource_id):
+        return legacy_fail("无权修改该资源", 403, "FORBIDDEN")
     data = request.json or {}
     allowed = {
         "type",
@@ -146,6 +188,8 @@ def update_resource(resource_id):
 @bp.route("/<resource_id>", methods=["DELETE"])
 @require_roles("teacher", "admin")
 def delete_resource(resource_id):
+    if not _can_edit_resource(resource_id):
+        return legacy_fail("无权删除该资源", 403, "FORBIDDEN")
     if db.delete_resource(resource_id):
         audit("resource.delete", "LearningResource", resource_id)
         return jsonify({"success": True, "message": "删除成功"})
@@ -155,6 +199,8 @@ def delete_resource(resource_id):
 @bp.route("/<resource_id>/attach", methods=["POST"])
 @require_roles("teacher", "admin")
 def attach_resource(resource_id):
+    if not _can_edit_resource(resource_id):
+        return legacy_fail("无权修改该资源", 403, "FORBIDDEN")
     data = request.json or {}
     node_ids = data.get("node_ids") or []
     if not node_ids:
@@ -177,6 +223,8 @@ def attach_resource(resource_id):
 @bp.route("/<resource_id>/detach", methods=["POST"])
 @require_roles("teacher", "admin")
 def detach_resource(resource_id):
+    if not _can_edit_resource(resource_id):
+        return legacy_fail("无权修改该资源", 403, "FORBIDDEN")
     data = request.json or {}
     node_id = data.get("node_id")
     if not node_id:
@@ -196,6 +244,8 @@ def batch_attach():
     node_ids = data.get("node_ids") or []
     if not resource_ids or not node_ids:
         return legacy_fail("请选择资源和知识点", 400, "VALIDATION_ERROR")
+    if not all(_can_edit_resource(resource_id) for resource_id in resource_ids):
+        return legacy_fail("无权修改选中的资源", 403, "FORBIDDEN")
     if not _can_edit_nodes(node_ids):
         return legacy_fail("无权挂载到选中的知识点", 403, "FORBIDDEN")
     attached = db.batch_attach_resources(
@@ -216,6 +266,8 @@ def batch_status():
     status = data.get("status")
     if status not in RESOURCE_STATUSES:
         return legacy_fail("不支持的资源状态", 400, "VALIDATION_ERROR")
+    if not all(_can_edit_resource(resource_id) for resource_id in resource_ids):
+        return legacy_fail("无权修改选中的资源", 403, "FORBIDDEN")
     updated = db.update_resources_status(resource_ids, status)
     audit("resource.batch_status", "LearningResource", "", {"resource_ids": resource_ids, "status": status})
     return jsonify({"success": True, "updated": updated})

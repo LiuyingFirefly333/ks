@@ -8,10 +8,17 @@ from routes.security import audit, current_user_id, legacy_fail, require_roles
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
 VALID_ROLES = {"student", "teacher", "admin"}
+DANGEROUS_CONFIRMATION_MESSAGE = "请确认将执行管理员危险操作"
 
 
 def _validate_role(role):
     return role in VALID_ROLES
+
+
+def _require_danger_confirmation(data):
+    if data.get("confirm") is True:
+        return None
+    return legacy_fail(DANGEROUS_CONFIRMATION_MESSAGE, 400, "CONFIRMATION_REQUIRED")
 
 
 @bp.route("/users", methods=["GET"])
@@ -118,6 +125,9 @@ def validate_graph():
 @require_roles("admin")
 def fix_graph_issue():
     data = request.json or {}
+    denied = _require_danger_confirmation(data)
+    if denied:
+        return denied
     issue = data.get("issue") or data
     result = db.fix_graph_issue(issue)
     audit("graph.fix_issue", "KnowledgeGraph", issue.get("node_id") or issue.get("source_id") or "", {
@@ -147,6 +157,9 @@ def create_graph_backup():
 @bp.route("/graph/clean", methods=["POST"])
 @require_roles("admin")
 def clean_graph_data():
+    denied = _require_danger_confirmation(request.json or {})
+    if denied:
+        return denied
     result = db.run_data_cleaning()
     audit("graph.clean", "KnowledgeGraph", "", result)
     return jsonify({"success": True, "result": result})
@@ -155,6 +168,9 @@ def clean_graph_data():
 @bp.route("/graph/cleanup-redundant", methods=["POST"])
 @require_roles("admin")
 def cleanup_redundant_nodes():
+    denied = _require_danger_confirmation(request.json or {})
+    if denied:
+        return denied
     result = db.cleanup_redundant_nodes()
     audit("graph.cleanup_redundant", "KnowledgeGraph", "", result)
     return jsonify({"success": True, "result": result})
@@ -164,6 +180,9 @@ def cleanup_redundant_nodes():
 @require_roles("admin")
 def incremental_update():
     data = request.json or {}
+    denied = _require_danger_confirmation(data)
+    if denied:
+        return denied
     if not data.get("course_id"):
         return legacy_fail("缺少课程 ID", 400, "VALIDATION_ERROR")
     nodes = data.get("nodes") or []

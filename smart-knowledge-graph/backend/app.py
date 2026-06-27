@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from flask import Flask, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask.json.provider import DefaultJSONProvider
 from neo4j.time import Date, DateTime, Time
@@ -22,6 +22,17 @@ from routes.resources import bp as resources_bp
 from routes.teaching import bp as teaching_bp
 
 
+ERROR_CODE_BY_STATUS = {
+    400: "BAD_REQUEST",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    405: "METHOD_NOT_ALLOWED",
+    409: "CONFLICT",
+    500: "INTERNAL_ERROR",
+}
+
+
 class Neo4jJSONProvider(DefaultJSONProvider):
     """JSON serializer for Neo4j temporal values."""
 
@@ -36,7 +47,31 @@ def create_app():
     app = Flask(__name__)
     app.config["SECRET_KEY"] = SECRET_KEY
     app.json = Neo4jJSONProvider(app)
-    CORS(app, resources={r"/api/*": {"origins": CORS_ORIGINS}})
+    CORS(app, resources={r"/api/*": {"origins": CORS_ORIGINS}}, supports_credentials=True)
+
+    @app.after_request
+    def normalize_error_response(response):
+        if not request.path.startswith("/api/") or response.status_code < 400 or not response.is_json:
+            return response
+        payload = response.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return response
+        error = payload.get("error")
+        if isinstance(error, dict) and "code" in error and "message" in error and payload.get("success") is False:
+            return response
+        message = error if isinstance(error, str) else payload.get("message") or "请求处理失败"
+        normalized = {
+            "success": False,
+            "error": {
+                "code": payload.get("code") or ERROR_CODE_BY_STATUS.get(response.status_code, "ERROR"),
+                "message": message,
+            },
+        }
+        if "details" in payload:
+            normalized["error"]["details"] = payload["details"]
+        normalized_response = jsonify(normalized)
+        normalized_response.status_code = response.status_code
+        return normalized_response
 
     @app.errorhandler(400)
     def bad_request(error):

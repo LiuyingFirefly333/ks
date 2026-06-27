@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from models.neo4j_client import db
-from routes.security import assert_self_or_roles, audit, current_role, current_user_id, legacy_fail, require_roles
+from routes.security import assert_self_or_roles, audit, can_access_course, can_access_node, current_role, current_user_id, legacy_fail, require_roles
 
 bp = Blueprint("exam", __name__, url_prefix="/api/exam")
 
@@ -37,13 +37,41 @@ def _question_payload(data):
     }
 
 
+def _can_edit_question_nodes(node_ids):
+    role = current_role()
+    if role == "admin":
+        return True
+    if role != "teacher":
+        return False
+    return all(db.can_teacher_edit_node(current_user_id(), node_id) for node_id in node_ids if node_id)
+
+
+def _can_view_question(question_id):
+    role = current_role()
+    if role == "admin":
+        return True
+    if role == "teacher":
+        return db.teacher_can_edit_question(current_user_id(), question_id)
+    if role == "student":
+        return db.student_can_access_question(current_user_id(), question_id)
+    return False
+
+
 @bp.route("/questions", methods=["GET"])
 @require_roles("student", "teacher", "admin")
 def list_questions():
+    course_id = request.args.get("course_id")
+    node_id = request.args.get("node_id")
+    if course_id and not can_access_course(course_id):
+        return legacy_fail("无权访问该课程题目", 403, "FORBIDDEN")
+    if node_id and not can_access_node(node_id):
+        return legacy_fail("无权访问该知识点题目", 403, "FORBIDDEN")
+    if not course_id and not node_id and current_role() != "admin":
+        return legacy_fail("请先选择可访问课程或知识点", 400, "SCOPE_REQUIRED")
     difficulty = request.args.get("difficulty")
     questions = db.list_questions(
-        course_id=request.args.get("course_id"),
-        node_id=request.args.get("node_id"),
+        course_id=course_id,
+        node_id=node_id,
         question_type=request.args.get("type"),
         difficulty=int(difficulty) if difficulty else None,
         status=request.args.get("status", "published"),
@@ -62,6 +90,8 @@ def create_question():
         return legacy_fail(str(exc), 400, "VALIDATION_ERROR")
     if not payload["stem"] or not payload["node_ids"]:
         return legacy_fail("题干和知识点不能为空", 400, "VALIDATION_ERROR")
+    if not _can_edit_question_nodes(payload["node_ids"]):
+        return legacy_fail("无权在选中的知识点下创建题目", 403, "FORBIDDEN")
     question = db.create_question(payload)
     audit("exam.question.create", "Question", question["id"], {"type": question.get("type")})
     return jsonify(question), 201
@@ -71,9 +101,17 @@ def create_question():
 @require_roles("student", "teacher", "admin")
 def select_questions():
     data = request.json or {}
+    course_id = data.get("course_id")
+    node_ids = data.get("node_ids") or []
+    if course_id and not can_access_course(course_id):
+        return legacy_fail("无权访问该课程题目", 403, "FORBIDDEN")
+    if node_ids and not all(can_access_node(node_id) for node_id in node_ids):
+        return legacy_fail("无权访问选中的知识点题目", 403, "FORBIDDEN")
+    if not course_id and not node_ids and current_role() != "admin":
+        return legacy_fail("请先选择可访问课程或知识点", 400, "SCOPE_REQUIRED")
     questions = db.select_questions_for_nodes(
-        data.get("node_ids") or [],
-        data.get("course_id"),
+        node_ids,
+        course_id,
         int(data.get("count", 10) or 10),
         int(data["difficulty"]) if data.get("difficulty") else None,
     )
@@ -148,9 +186,12 @@ def generate_test():
     student_id, denied = _target_student_id(data)
     if denied:
         return denied
+    course_id = data.get("course_id")
+    if course_id and not can_access_course(course_id):
+        return legacy_fail("无权生成该课程训练", 403, "FORBIDDEN")
     paper = db.generate_test_paper(
         student_id,
-        data.get("course_id"),
+        course_id,
         int(data.get("count", 10)),
     )
     return jsonify(paper)

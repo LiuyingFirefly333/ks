@@ -32,6 +32,9 @@ CORS_ORIGINS = [
     if origin.strip()
 ]
 TOKEN_TTL_SECONDS = int(os.getenv("TOKEN_TTL_SECONDS", str(60 * 60 * 12)))
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "kg_auth")
+AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "false").lower() == "true"
+AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "Lax")
 
 # DeepSeek LLM config
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")

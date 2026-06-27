@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from models.neo4j_client import db
-from routes.security import audit, assert_self_or_roles, current_role, current_user_id, legacy_fail, require_roles
+from routes.security import audit, assert_self_or_roles, can_access_course, can_access_node, current_role, current_user_id, legacy_fail, require_roles
 
 bp = Blueprint("graph", __name__, url_prefix="/api/graph")
 
@@ -39,6 +39,11 @@ def get_graph():
       if denied:
           return denied
 
+    if course_id and not can_access_course(course_id):
+        return legacy_fail("无权访问该课程图谱", 403, "FORBIDDEN")
+    if not course_id and current_role() != "admin":
+        return legacy_fail("请先选择可访问课程", 400, "COURSE_REQUIRED")
+
     if course_id and student_id:
         data = db.get_graph_with_mastery(course_id, student_id, category)
         return jsonify(data)
@@ -54,8 +59,12 @@ def get_graph():
 def get_categories():
     course_id = request.args.get("course_id")
     if course_id:
+        if not can_access_course(course_id):
+            return legacy_fail("无权访问该课程分类", 403, "FORBIDDEN")
         cats = db.list_course_categories(course_id)
         return jsonify(cats)
+    if current_role() != "admin":
+        return legacy_fail("请先选择可访问课程", 400, "COURSE_REQUIRED")
     cats = db.list_categories()
     return jsonify(cats)
 
@@ -141,6 +150,8 @@ def get_neighbors():
     node_id = request.args.get("nodeId")
     if not node_id:
         return legacy_fail("缺少参数 nodeId", 400, "VALIDATION_ERROR")
+    if not can_access_node(node_id):
+        return legacy_fail("无权访问该知识点邻居", 403, "FORBIDDEN")
     with db.driver.session() as session:
         result = session.run(
             """

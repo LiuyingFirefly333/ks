@@ -1,7 +1,7 @@
 from uuid import uuid4
 from flask import Blueprint, request, jsonify
 from models.neo4j_client import db
-from routes.security import audit, current_role, current_user_id, legacy_fail, require_roles
+from routes.security import audit, can_access_course, can_access_node, current_role, current_user_id, legacy_fail, require_roles
 
 bp = Blueprint("knowledge", __name__, url_prefix="/api/knowledge")
 
@@ -12,8 +12,12 @@ def list_knowledge():
     course_id = request.args.get("course_id")
     category = request.args.get("category")
     if course_id:
+        if not can_access_course(course_id):
+            return legacy_fail("无权访问该课程知识点", 403, "FORBIDDEN")
         nodes = db.list_course_nodes(course_id, category)
         return jsonify(nodes)
+    if current_role() != "admin":
+        return legacy_fail("请先选择可访问课程", 400, "COURSE_REQUIRED")
     nodes = db.list_nodes(category)
     return jsonify(nodes)
 
@@ -26,8 +30,12 @@ def search_knowledge():
         return jsonify([])
     course_id = request.args.get("course_id")
     if course_id:
+        if not can_access_course(course_id):
+            return legacy_fail("无权搜索该课程知识点", 403, "FORBIDDEN")
         nodes = db.search_course_nodes(course_id, q)
         return jsonify(nodes)
+    if current_role() != "admin":
+        return legacy_fail("请先选择可访问课程", 400, "COURSE_REQUIRED")
     nodes = db.search_nodes(q)
     return jsonify(nodes)
 
@@ -38,15 +46,17 @@ def get_knowledge(node_id):
     node = db.get_node(node_id)
     if not node:
         return legacy_fail("知识点不存在", 404, "KNOWLEDGE_NOT_FOUND")
+    if not can_access_node(node_id):
+        return legacy_fail("无权访问该知识点", 403, "FORBIDDEN")
     return jsonify(node)
 
 
 def _can_edit_course(course_id):
     role = current_role()
-    if role == "admin" or not course_id:
+    if role == "admin":
         return True
     if role == "teacher":
-        return db.teacher_owns_course(current_user_id(), course_id)
+        return bool(course_id and db.teacher_owns_course(current_user_id(), course_id))
     return False
 
 
@@ -56,6 +66,8 @@ def create_knowledge():
     data = request.json or {}
     if not data.get("name"):
         return legacy_fail("知识点名称不能为空", 400, "VALIDATION_ERROR")
+    if current_role() == "teacher" and not data.get("course_id"):
+        return legacy_fail("教师创建知识点时必须选择课程", 400, "COURSE_REQUIRED")
     if not _can_edit_course(data.get("course_id")):
         return legacy_fail("无权在该课程下创建知识点", 403, "FORBIDDEN")
 

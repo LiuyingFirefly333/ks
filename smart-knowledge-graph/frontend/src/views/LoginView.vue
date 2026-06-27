@@ -57,6 +57,7 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { authApi } from '../api/index.js'
+import { saveAuthSession } from '../services/authStorage.js'
 
 const emit = defineEmits(['login-success'])
 const mode = ref('login')
@@ -96,10 +97,8 @@ async function handleSubmit() {
       result = await authApi.registerTeacher(form.name, form.email, form.password)
     }
     const user = result.student || result.teacher || result.admin
-    if (user && user.token) {
-      localStorage.setItem('token', user.token)
-      localStorage.setItem('user', JSON.stringify({ ...user, role: role.value }))
-      localStorage.setItem('role', role.value)
+    if (user) {
+      saveAuthSession(user, role.value)
       emit('login-success', { ...user, role: role.value })
     } else {
       error.value = '登录返回数据异常，请检查后端服务'

@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from models.neo4j_client import db
-from routes.security import assert_self_or_roles, legacy_fail, require_roles
+from routes.security import assert_self_or_roles, can_access_node, legacy_fail, require_roles
 
 bp = Blueprint("recommend", __name__, url_prefix="/api/recommend")
 
@@ -89,7 +89,57 @@ def _path_payload(path, path_type=None, student_id=None, target_id=None):
     )
     tasks = _build_tasks(path, mastery_map)
     total_time = sum(task["estimated_time"] for task in tasks)
+    avg_difficulty = round(sum(int(task["difficulty"] or 1) for task in tasks) / max(len(tasks), 1), 1)
     completed_count = sum(1 for task in tasks if task["status"] == "completed")
+    review_count = sum(1 for task in tasks if task["status"] == "review")
+    pending_count = sum(1 for task in tasks if task["status"] == "pending")
+    first_pending = next((task for task in tasks if task["status"] != "completed"), None)
+    strategy_label = {
+        "easy": "难度较低、负担更轻",
+        "thorough": "覆盖更完整、适合系统补齐",
+        "roadmap": "从基础节点到目标节点的完整链路",
+    }.get(path_type or "shortest", "从已掌握内容到目标知识点的最短前置链")
+    reason_parts = [strategy_label]
+    if weak_prerequisites:
+        reason_parts.append(f"检测到 {len(weak_prerequisites)} 个薄弱前置知识")
+    if review_count or pending_count:
+        reason_parts.append(f"包含 {pending_count} 个待学习任务和 {review_count} 个复习任务")
+    basis = {
+        "mastery": [
+            {
+                "node_id": task["node_id"],
+                "name": task["name"],
+                "score": task["mastery_score"],
+                "level": task["mastery_level"],
+            }
+            for task in tasks
+        ],
+        "weak_prerequisites": [
+            {
+                "node_id": node.get("id"),
+                "name": node.get("name"),
+                "score": node.get("mastery_score", 0),
+                "level": node.get("mastery_level", "unlearned"),
+            }
+            for node in weak_prerequisites
+        ],
+        "prerequisite_edges": [
+            {"source": path[index].get("id"), "target": path[index + 1].get("id")}
+            for index in range(max(len(path) - 1, 0))
+        ],
+    }
+    scores = {
+        "time": max(0, min(100, 100 - max(total_time - 30, 0))),
+        "difficulty": max(0, min(100, round(110 - avg_difficulty * 18))),
+        "coverage": max(0, min(100, round(len(tasks) / max(len(weak_prerequisites), 1) * 35))) if weak_prerequisites else 70 + min(len(tasks) * 5, 30),
+        "average_difficulty": avg_difficulty,
+    }
+    next_action = {
+        "type": "review" if first_pending and first_pending["status"] == "review" else "learn",
+        "label": f"先处理：{first_pending['name']}" if first_pending else "当前路径已完成，进入专项训练巩固",
+        "node_id": first_pending.get("node_id") if first_pending else None,
+        "node_name": first_pending.get("name") if first_pending else None,
+    }
     payload = {
         "path": path,
         "tasks": tasks,
@@ -99,6 +149,10 @@ def _path_payload(path, path_type=None, student_id=None, target_id=None):
         "progress": round(completed_count / max(len(tasks), 1), 2),
         "weak_prerequisites": weak_prerequisites,
         "blocked": bool(weak_prerequisites),
+        "reason": "；".join(reason_parts),
+        "basis": basis,
+        "scores": scores,
+        "next_action": next_action,
     }
     if path_type:
         payload["type"] = path_type
@@ -109,6 +163,9 @@ def _recommend_with_strategy(data, strategy):
     student_id = data.get("student_id")
     target_id = data.get("target")
     path_type = strategy if strategy != "shortest" else None
+
+    if not can_access_node(target_id):
+        return legacy_fail("无权访问目标知识点", 403, "FORBIDDEN")
 
     if student_id:
         denied = assert_self_or_roles(student_id, "teacher", "admin")
@@ -231,6 +288,8 @@ def delete_mastery():
 @bp.route("/prerequisites/<node_id>", methods=["GET"])
 @require_roles("student", "teacher", "admin")
 def get_prerequisites(node_id):
+    if not can_access_node(node_id):
+        return legacy_fail("无权访问该知识点前置关系", 403, "FORBIDDEN")
     with db.driver.session() as session:
         result = session.run(
             """
@@ -254,6 +313,8 @@ def get_prerequisites(node_id):
 @bp.route("/roadmap/<target_id>", methods=["GET"])
 @require_roles("student", "teacher", "admin")
 def get_roadmap(target_id):
+    if not can_access_node(target_id):
+        return legacy_fail("无权访问目标知识点", 403, "FORBIDDEN")
     path_nodes = _roadmap_nodes(target_id)
     if not path_nodes:
         return legacy_fail("未找到完整前置链路", 404, "ROADMAP_NOT_FOUND")

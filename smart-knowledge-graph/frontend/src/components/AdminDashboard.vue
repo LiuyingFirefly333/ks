@@ -1,151 +1,28 @@
 <template>
   <div class="admin-dashboard">
-    <div class="admin-stats">
-      <div class="stat-card"><div class="stat-num">{{ stats.total_nodes }}</div><div class="stat-label">知识点</div></div>
-      <div class="stat-card"><div class="stat-num">{{ stats.total_students }}</div><div class="stat-label">学生</div></div>
-      <div class="stat-card"><div class="stat-num">{{ stats.total_teachers }}</div><div class="stat-label">教师</div></div>
-      <div class="stat-card"><div class="stat-num">{{ stats.total_admins || 0 }}</div><div class="stat-label">管理员</div></div>
-      <div class="stat-card"><div class="stat-num">{{ stats.total_classes }}</div><div class="stat-label">班级</div></div>
-    </div>
+    <AdminStatsCards :stats="stats" />
     <button class="secondary" @click="refreshAll">刷新数据</button>
 
-    <div class="admin-section behavior-dashboard">
-      <div class="section-head">
-        <h4>学习行为数据大屏</h4>
-        <div class="admin-section-actions">
-          <button class="secondary small" @click="resetBehaviorFilters">重置筛选</button>
-          <button class="secondary small" @click="fetchStats">刷新大屏</button>
-        </div>
-      </div>
-
-      <div class="dashboard-filter-bar">
-        <div class="form-row">
-          <label>课程</label>
-          <select v-model="behaviorFilters.course_id" @change="fetchStats">
-            <option value="">全部课程</option>
-            <option v-for="course in dashboardCourses" :key="course.id" :value="course.id">{{ course.name }}</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>年级</label>
-          <select v-model="behaviorFilters.grade" @change="fetchStats">
-            <option value="">全部年级</option>
-            <option v-for="grade in dashboardGrades" :key="grade" :value="grade">{{ grade }}</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>班级</label>
-          <select v-model="behaviorFilters.class_id" @change="fetchStats">
-            <option value="">全部班级</option>
-            <option v-for="cls in filteredDashboardClasses" :key="cls.id" :value="cls.id">{{ cls.name }}</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>学科</label>
-          <select v-model="behaviorFilters.subject" @change="fetchStats">
-            <option value="">全部学科</option>
-            <option v-for="subject in dashboardSubjects" :key="subject" :value="subject">{{ subject }}</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>时间</label>
-          <select v-model.number="behaviorFilters.days" @change="fetchStats">
-            <option :value="7">近 7 天</option>
-            <option :value="30">近 30 天</option>
-            <option :value="90">近 90 天</option>
-            <option :value="180">近 180 天</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="dashboard-config">
-        <label v-for="item in dashboardConfigItems" :key="item.key" class="dashboard-toggle">
-          <input v-model="dashboardConfig[item.key]" type="checkbox" />
-          <span>{{ item.label }}</span>
-        </label>
-      </div>
-
-      <div v-if="dashboardConfig.activity" class="qa-analytics-grid behavior-metric-grid">
-        <div class="qa-analytics-item"><strong>{{ behaviorActivity.qa_questions || 0 }}</strong><span>学生提问</span></div>
-        <div class="qa-analytics-item"><strong>{{ behaviorActivity.practice_attempts || 0 }}</strong><span>答题尝试</span></div>
-        <div class="qa-analytics-item"><strong>{{ behaviorActivity.error_records || 0 }}</strong><span>新增错题</span></div>
-        <div class="qa-analytics-item"><strong>{{ behaviorActivity.active_students || 0 }}</strong><span>活跃学生</span></div>
-      </div>
-
-      <div class="dashboard-panel-grid">
-        <div v-if="dashboardConfig.heat" class="dashboard-panel wide">
-          <div class="panel-title-row">
-            <h5>知识点访问热度 TOP</h5>
-            <span>{{ behaviorFilters.days }} 天</span>
-          </div>
-          <div v-if="!knowledgeHeatTop.length" class="empty-state compact">暂无行为热度数据</div>
-          <button
-            v-for="node in knowledgeHeatTop"
-            :key="node.node_id"
-            class="heat-rank-row"
-            @click="$emit('locate', node.node_id)"
-          >
-            <span class="heat-rank-name">{{ node.name }}</span>
-            <span class="heat-rank-bar"><i :style="{ width: heatWidth(node.heat) }"></i></span>
-            <b>{{ node.heat }}</b>
-            <small>问 {{ node.qa_count }} · 练 {{ node.attempt_count }} · 错 {{ node.error_count }}</small>
-          </button>
-        </div>
-
-        <div v-if="dashboardConfig.questions" class="dashboard-panel">
-          <div class="panel-title-row">
-            <h5>高频提问榜</h5>
-            <span>AI 来源引用</span>
-          </div>
-          <div v-if="!questionTop.length" class="empty-state compact">暂无高频提问数据</div>
-          <button v-for="node in questionTop" :key="node.node_id" class="compact-rank-row" @click="$emit('locate', node.node_id)">
-            <span>{{ node.name }}</span>
-            <b>{{ node.qa_count }}</b>
-          </button>
-        </div>
-
-        <div v-if="dashboardConfig.errors" class="dashboard-panel">
-          <div class="panel-title-row">
-            <h5>错题高频考点</h5>
-            <span>错题本</span>
-          </div>
-          <div v-if="!errorHotNodes.length" class="empty-state compact">暂无错题考点数据</div>
-          <button v-for="node in errorHotNodes" :key="node.node_id" class="compact-rank-row danger" @click="$emit('locate', node.node_id)">
-            <span>{{ node.name }}</span>
-            <b>{{ node.error_count }}</b>
-          </button>
-        </div>
-
-        <div v-if="dashboardConfig.weak" class="dashboard-panel">
-          <div class="panel-title-row">
-            <h5>班级薄弱分布</h5>
-            <span>低掌握 + 错题</span>
-          </div>
-          <div v-if="!classWeakDistribution.length" class="empty-state compact">暂无班级薄弱数据</div>
-          <div v-for="cls in classWeakDistribution" :key="cls.class_id" class="class-weak-row">
-            <div>
-              <strong>{{ cls.class_name }}</strong>
-              <small>{{ cls.grade || '未分级' }} · {{ cls.subject || '未分科' }} · {{ cls.student_count || 0 }} 人</small>
-            </div>
-            <span>薄弱 {{ cls.weak_count || 0 }}</span>
-            <b>{{ cls.avg_score || 0 }}</b>
-          </div>
-        </div>
-
-        <div v-if="dashboardConfig.trend" class="dashboard-panel">
-          <div class="panel-title-row">
-            <h5>活跃统计</h5>
-            <span>日趋势</span>
-          </div>
-          <div v-if="!dailyActivity.length" class="empty-state compact">暂无活跃趋势数据</div>
-          <div v-for="day in dailyActivity" :key="day.date" class="daily-activity-row">
-            <span>{{ day.date?.slice(5) }}</span>
-            <i :style="{ width: activityWidth(day) }"></i>
-            <small>问 {{ day.qa || 0 }} · 练 {{ day.attempts || 0 }} · 错 {{ day.errors || 0 }}</small>
-          </div>
-        </div>
-      </div>
-    </div>
+    <AdminBehaviorDashboard
+      :filters="behaviorFilters"
+      :config="dashboardConfig"
+      :config-items="dashboardConfigItems"
+      :courses="dashboardCourses"
+      :grades="dashboardGrades"
+      :classes="filteredDashboardClasses"
+      :subjects="dashboardSubjects"
+      :activity="behaviorActivity"
+      :knowledge-heat-top="knowledgeHeatTop"
+      :question-top="questionTop"
+      :class-weak-distribution="classWeakDistribution"
+      :error-hot-nodes="errorHotNodes"
+      :daily-activity="dailyActivity"
+      :heat-width="heatWidth"
+      :activity-width="activityWidth"
+      @refresh="fetchStats"
+      @reset-filters="resetBehaviorFilters"
+      @locate="$emit('locate', $event)"
+    />
 
     <div class="admin-section">
       <div class="section-head">
@@ -166,78 +43,23 @@
       </div>
     </div>
 
-    <div class="admin-section">
-      <div class="section-head">
-        <h4>用户管理</h4>
-        <div class="admin-section-actions">
-          <button class="secondary small" @click="triggerImport">导入 CSV</button>
-          <button class="secondary small" @click="exportUsers">导出 CSV</button>
-          <input ref="importInput" type="file" accept=".csv,text/csv" class="hidden-file-input" @change="importUsers" />
-        </div>
-      </div>
-
-      <div class="admin-user-form">
-        <div class="form-row">
-          <label>姓名</label>
-          <input v-model.trim="createForm.name" placeholder="例如：王同学" />
-        </div>
-        <div class="form-row">
-          <label>邮箱</label>
-          <input v-model.trim="createForm.email" type="email" placeholder="name@example.com" />
-        </div>
-        <div class="form-row">
-          <label>初始密码</label>
-          <input v-model="createForm.password" type="password" placeholder="至少 6 位" />
-        </div>
-        <div class="form-row">
-          <label>角色</label>
-          <select v-model="createForm.role">
-            <option v-for="role in roles" :key="role.value" :value="role.value">{{ role.label }}</option>
-          </select>
-        </div>
-        <button @click="createUser" :disabled="userLoading || !canCreate">新增账号</button>
-      </div>
-
-      <div v-if="userMessage" class="inline-hint">{{ userMessage }}</div>
-      <div v-if="userError" class="inline-error">{{ userError }}</div>
-
-      <div v-if="allUsers.length === 0" class="empty-state compact">暂无用户</div>
-      <div v-else class="admin-user-table">
-        <div class="admin-user-table-head">
-          <span>账号</span>
-          <span>邮箱</span>
-          <span>角色</span>
-          <span>状态</span>
-          <span>操作</span>
-        </div>
-        <div v-for="u in allUsers" :key="u.role + '-' + u.id" class="admin-user-row" :class="{ disabled: u.disabled }">
-          <div class="admin-user-main">
-            <strong>{{ u.name }}</strong>
-            <small>{{ formatDate(u.created_at) || u.id }}</small>
-          </div>
-          <span class="admin-user-email">{{ u.email }}</span>
-          <select class="admin-role-select" :value="u.role" :disabled="userLoading || u.disabled" @change="assignRole(u, $event.target.value)">
-            <option v-for="role in roles" :key="role.value" :value="role.value">{{ role.label }}</option>
-          </select>
-          <span class="admin-status-badge" :class="{ disabled: u.disabled }">{{ u.disabled ? '已禁用' : '正常' }}</span>
-          <button
-            class="admin-disable-btn"
-            :disabled="userLoading || u.disabled"
-            @click="disable(u.role, u.id)"
-          >
-            禁用
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="stats.hot_nodes?.length" class="admin-section">
-      <h4>热点知识点 TOP 10</h4>
-      <div v-for="h in stats.hot_nodes" :key="h.node_id" class="admin-hot-row">
-        <span class="admin-hot-name" @click="$emit('locate', h.node_id)">{{ h.name }}</span>
-        <span class="admin-hot-meta">{{ h.assess_count }} 次 · 均分 {{ h.avg_score }}</span>
-      </div>
-    </div>
+    <AdminUserManagement
+      ref="userManagementRef"
+      :users="allUsers"
+      :roles="roles"
+      :create-form="createForm"
+      :can-create="Boolean(canCreate)"
+      :loading="userLoading"
+      :message="userMessage"
+      :error="userError"
+      :format-date="formatDate"
+      @trigger-import="triggerImport"
+      @export-users="exportUsers"
+      @import-users="importUsers"
+      @create-user="createUser"
+      @assign-role="assignRole"
+      @disable-user="disable"
+    />
 
     <div class="admin-section">
       <div class="section-head">
@@ -270,60 +92,36 @@
       </div>
     </div>
 
-    <div class="admin-section">
-      <div class="section-head">
-        <h4>知识库运维</h4>
-        <div class="admin-section-actions">
-          <button class="secondary small" @click="createBackup" :disabled="opsLoading">版本备份</button>
-          <button class="secondary small" @click="cleanGraphData" :disabled="opsLoading">数据清洗</button>
-          <button class="secondary small" @click="cleanupRedundant" :disabled="opsLoading">冗余清理</button>
-          <button class="secondary small" @click="checkConflicts" :disabled="conflictLoading">冲突检测</button>
-        </div>
-      </div>
-      <div v-if="opsMessage" class="inline-hint">{{ opsMessage }}</div>
-
-      <div class="ops-grid">
-        <div class="ops-card">
-          <h5>版本备份</h5>
-          <div v-if="!backups.length" class="empty-state compact">暂无备份</div>
-          <div v-for="backup in backups.slice(0, 4)" :key="backup.id" class="backup-row">
-            <span>{{ backup.label || '知识库备份' }}</span>
-            <small>{{ formatDate(backup.created_at) }} · {{ backup.node_count || 0 }} 节点 · {{ backup.relation_count || 0 }} 关系</small>
-          </div>
-        </div>
-
-        <div class="ops-card">
-          <h5>增量更新</h5>
-          <div class="form-row">
-            <label>目标课程</label>
-            <select v-model="incrementalCourseId">
-              <option value="">选择课程</option>
-              <option v-for="course in courses" :key="course.id" :value="course.id">{{ course.name }}</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>JSON 数据</label>
-            <textarea v-model.trim="incrementalText" rows="6" placeholder='{"nodes":[{"name":"知识点A"}],"relations":[]}'></textarea>
-          </div>
-          <button class="full-width" @click="applyIncrementalUpdate" :disabled="opsLoading || !incrementalCourseId || !incrementalText">应用增量更新</button>
-        </div>
-      </div>
-
-      <div v-if="conflictLoading" class="loading-spinner"></div>
-      <div v-if="!conflictLoading && conflicts.length === 0" class="empty-state compact">暂未发现冲突</div>
-      <div v-for="(c, i) in conflicts" :key="i" class="conflict-item" :class="c.type">
-        <span class="conflict-badge">{{ conflictLabel(c) }}</span>
-        <span class="conflict-name">{{ c.name || c.node_id || c.source_id }}</span>
-        <span class="conflict-detail">{{ c.detail }}</span>
-        <button class="secondary small" @click="fixConflict(c)" :disabled="opsLoading || !c.fixable">修复</button>
-      </div>
-    </div>
+    <AdminGraphOps
+      :hot-nodes="stats.hot_nodes || []"
+      :backups="backups"
+      :courses="courses"
+      :conflicts="conflicts"
+      v-model:incremental-course-id="incrementalCourseId"
+      v-model:incremental-text="incrementalText"
+      :conflict-loading="conflictLoading"
+      :ops-loading="opsLoading"
+      :ops-message="opsMessage"
+      :format-date="formatDate"
+      :conflict-label="conflictLabel"
+      @locate="$emit('locate', $event)"
+      @create-backup="createBackup"
+      @clean-graph-data="cleanGraphData"
+      @cleanup-redundant="cleanupRedundant"
+      @check-conflicts="checkConflicts"
+      @fix-conflict="fixConflict"
+      @apply-incremental-update="applyIncrementalUpdate"
+    />
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { adminApi, courseApi, qaApi } from '../api/index.js'
+import AdminBehaviorDashboard from './admin/AdminBehaviorDashboard.vue'
+import AdminGraphOps from './admin/AdminGraphOps.vue'
+import AdminStatsCards from './admin/AdminStatsCards.vue'
+import AdminUserManagement from './admin/AdminUserManagement.vue'
 
 defineEmits(['locate'])
 
@@ -377,7 +175,7 @@ const opsLoading = ref(false)
 const userMessage = ref('')
 const userError = ref('')
 const opsMessage = ref('')
-const importInput = ref(null)
+const userManagementRef = ref(null)
 const createForm = reactive({ name: '', email: '', password: '', role: 'student' })
 const behaviorFilters = reactive({
   course_id: '',
@@ -556,7 +354,7 @@ async function disable(type, id) {
 }
 
 function triggerImport() {
-  importInput.value?.click()
+  userManagementRef.value?.openImportDialog()
 }
 
 async function importUsers(event) {

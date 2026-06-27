@@ -33,21 +33,37 @@
           </div>
 
           <nav class="sidebar-nav" aria-label="功能导航">
-            <button
-              v-for="item in navItems"
-              :key="item.key"
-              class="sidebar-nav-item"
-              :class="{ active: activeNav === item.key }"
-              :title="item.hint"
-              @click="onNavClick(item.key)"
-            >
-              <span class="sidebar-nav-icon">{{ item.icon }}</span>
-              <span>
-                <b>{{ item.label }}</b>
-                <small>{{ item.hint }}</small>
-              </span>
-            </button>
+            <div v-for="group in navGroups" :key="group.title" class="sidebar-nav-group">
+              <div class="sidebar-nav-group-title">{{ group.title }}</div>
+              <button
+                v-for="item in group.items"
+                :key="item.key"
+                class="sidebar-nav-item"
+                :class="{ active: activeNav === item.key }"
+                :title="item.hint"
+                @click="onNavClick(item.key)"
+              >
+                <span class="sidebar-nav-icon">{{ item.icon }}</span>
+                <span>
+                  <b>{{ item.label }}</b>
+                  <small>{{ item.hint }}</small>
+                </span>
+              </button>
+            </div>
           </nav>
+        </section>
+
+        <section class="sidebar-section next-action-section">
+          <div class="course-sidebar-head">
+            <div>
+              <span class="sidebar-eyebrow">下一步</span>
+              <h2>{{ primaryAction.title }}</h2>
+            </div>
+          </div>
+          <p>{{ primaryAction.text }}</p>
+          <button class="soft-button full-width" @click="switchNav(primaryAction.nav)">
+            {{ primaryAction.cta }}
+          </button>
         </section>
 
         <section class="sidebar-section course-section">
@@ -216,6 +232,7 @@
               :studentId="user?.id"
               :courseId="currentCourseId"
               @locate-node="onLocateErrorNode"
+              @training-submitted="onTrainingSubmitted"
             />
 
             <ProfileCenter
@@ -369,7 +386,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
-import { knowledgeApi, graphApi, courseApi, analyticsApi, classroomApi } from '../api/index.js'
+import { knowledgeApi, graphApi } from '../api/index.js'
 import KnowledgeGraph from '../components/KnowledgeGraph.vue'
 import KnowledgeSearch from '../components/KnowledgeSearch.vue'
 import KnowledgePanel from '../components/KnowledgePanel.vue'
@@ -384,9 +401,15 @@ import ResourceLibrary from '../components/ResourceLibrary.vue'
 import ClassLearningReport from '../components/ClassLearningReport.vue'
 import TeachingResearch from '../components/TeachingResearch.vue'
 import SubjectiveReview from '../components/SubjectiveReview.vue'
+import { useClassroomHeatmap } from '../composables/useClassroomHeatmap.js'
+import { useCourses } from '../composables/useCourses.js'
+import { useGraphState } from '../composables/useGraphState.js'
+import { useMastery } from '../composables/useMastery.js'
+import { useToast } from '../composables/useToast.js'
 
 const props = defineProps({ user: { type: Object, default: null } })
 defineEmits(['logout', 'profile-updated'])
+const { showToast } = useToast()
 
 const roleLabel = computed(() => ({ student: '学生', teacher: '教师', admin: '管理员' }[props.user?.role] || '学生'))
 const canEditGraph = computed(() => props.user?.role === 'teacher' || props.user?.role === 'admin')
@@ -413,10 +436,60 @@ const ROLE_NAV_KEYS = {
   admin: ['graph', 'browse', 'resources', 'manage', 'admin'],
 }
 
+const ROLE_NAV_GROUPS = {
+  student: [
+    { title: '学习地图', keys: ['graph', 'browse', 'path'] },
+    { title: '学习助手', keys: ['qa'] },
+    { title: '训练反馈', keys: ['paper', 'errors'] },
+  ],
+  teacher: [
+    { title: '课程建设', keys: ['graph', 'browse', 'manage', 'resources', 'teaching'] },
+    { title: '教学诊断', keys: ['classReport'] },
+    { title: '教学干预', keys: ['review', 'qa'] },
+  ],
+  admin: [
+    { title: '用户治理', keys: ['admin'] },
+    { title: '图谱治理', keys: ['graph', 'browse', 'manage', 'resources'] },
+  ],
+}
+
+const ROLE_ACTIONS = {
+  student: {
+    title: '完成学习闭环',
+    text: '先看图谱定位薄弱点，再生成专项训练，错题会回流到掌握度。',
+    cta: '开始专项训练',
+    nav: 'paper',
+  },
+  teacher: {
+    title: '诊断班级薄弱点',
+    text: '从班级报告查看共性问题，再补资源、调题目、批阅主观题。',
+    cta: '查看班级报告',
+    nav: 'classReport',
+  },
+  admin: {
+    title: '治理图谱质量',
+    text: '检查用户、资源和知识图谱状态，及时处理孤立节点与数据风险。',
+    cta: '打开数据看板',
+    nav: 'admin',
+  },
+}
+
 const navItems = computed(() => {
   const role = props.user?.role || 'student'
   return (ROLE_NAV_KEYS[role] || ROLE_NAV_KEYS.student).map(key => NAV_DEFS[key]).filter(Boolean)
 })
+
+const navGroups = computed(() => {
+  const role = props.user?.role || 'student'
+  return (ROLE_NAV_GROUPS[role] || ROLE_NAV_GROUPS.student)
+    .map(group => ({
+      ...group,
+      items: group.keys.map(key => NAV_DEFS[key]).filter(Boolean),
+    }))
+    .filter(group => group.items.length)
+})
+
+const primaryAction = computed(() => ROLE_ACTIONS[props.user?.role || 'student'] || ROLE_ACTIONS.student)
 
 const currentNav = computed(() => NAV_DEFS[activeNav.value] || NAV_DEFS.graph)
 const currentNavLabel = computed(() => currentNav.value.label)
@@ -425,28 +498,44 @@ const currentNavHint = computed(() => currentNav.value.hint)
 const graphRef = ref(null)
 const pathRecommendRef = ref(null)
 const activeNav = ref('graph')
-const nodes = ref([])
-const links = ref([])
-const categories = ref([])
-const selectedCategory = ref('')
 const selectedNode = ref(null)
 const selectedLink = ref(null)
-const highlightedPath = ref([])
-const highlightedPaths = ref([])
-const searchNodeId = ref(null)
-const courses = ref([])
-const currentCourseId = ref('')
-const currentClassId = ref('')
-const masteryMap = ref({})
-const classes = ref([])
-const heatmapData = ref([])
-const heatmapMode = ref(false)
-const masteredIds = ref([])
+const { courses, currentCourseId, loadCourses, selectCourse: setCourse } = useCourses()
+const userId = computed(() => props.user?.id || '')
+const {
+  nodes,
+  links,
+  categories,
+  selectedCategory,
+  highlightedPath,
+  highlightedPaths,
+  searchNodeId,
+  graphPositions,
+  currentGraphViewport,
+  currentGraphLayoutMode,
+  loadGraphPositions,
+  onGraphViewportChange,
+  onGraphLayoutChange,
+  onNodePositionChange,
+  fetchGraph,
+  fetchCategories,
+  clearPath,
+  setPath,
+  removeNodePosition,
+} = useGraphState(currentCourseId, userId)
+const { masteryMap, masteredIds, fetchMastery, updateLocalMastery } = useMastery(userId, currentCourseId)
+const userRef = computed(() => props.user || null)
+const {
+  classes,
+  currentClassId,
+  heatmapData,
+  heatmapMode,
+  fetchClasses,
+  onClassChange,
+  toggleHeatmap,
+} = useClassroomHeatmap(userRef, currentCourseId, fetchGraph)
 const focusedNode = ref(null)
 const graphEditMode = ref(false)
-const graphPositions = ref({})
-const graphViewports = ref({})
-const graphLayoutModes = ref({})
 const relationSourceId = ref('')
 const relationDraftType = ref('PREREQUISITE')
 const relationDraftWeight = ref(1)
@@ -456,8 +545,6 @@ const form = ref({ name: '', category: '', difficulty: 1, estimated_time: 0, des
 const relSource = ref('')
 const relTarget = ref('')
 const relType = ref('PREREQUISITE')
-const currentGraphViewport = computed(() => graphViewports.value[currentCourseId.value || 'global'] || null)
-const currentGraphLayoutMode = computed(() => graphLayoutModes.value[currentCourseId.value || 'global'] || 'dagre')
 
 function displayCategory(cat) {
   if (!cat) return '未分类'
@@ -481,60 +568,9 @@ function relationKey(link) {
   return `${normalizeId(link.source)}->${normalizeId(link.target)}:${link.type || 'RELATED_TO'}`
 }
 
-function positionStorageKey() {
-  return `kg:positions:${currentCourseId.value || 'global'}`
-}
-
-function loadGraphPositions() {
-  try {
-    graphPositions.value = JSON.parse(localStorage.getItem(positionStorageKey()) || '{}')
-  } catch {
-    graphPositions.value = {}
-  }
-}
-
-function saveGraphPositions() {
-  localStorage.setItem(positionStorageKey(), JSON.stringify(graphPositions.value))
-}
-
-function viewportStorageKey() {
-  return currentCourseId.value || 'global'
-}
-
 function recordGraphViewport() {
   const viewport = graphRef.value?.getViewport?.()
   if (viewport) onGraphViewportChange(viewport)
-}
-
-function onGraphViewportChange(viewport) {
-  if (!viewport) return
-  const x = Number(viewport.x)
-  const y = Number(viewport.y)
-  const k = Number(viewport.k)
-  if (![x, y, k].every(Number.isFinite)) return
-  const key = viewportStorageKey()
-  if (viewport.layoutMode) {
-    graphLayoutModes.value = {
-      ...graphLayoutModes.value,
-      [key]: viewport.layoutMode === 'force' ? 'force' : 'dagre',
-    }
-  }
-  graphViewports.value = {
-    ...graphViewports.value,
-    [key]: {
-      x,
-      y,
-      k,
-      layoutMode: viewport.layoutMode,
-    },
-  }
-}
-
-function onGraphLayoutChange(mode) {
-  const key = viewportStorageKey()
-  graphLayoutModes.value = { ...graphLayoutModes.value, [key]: mode === 'force' ? 'force' : 'dagre' }
-  const { [key]: _removed, ...rest } = graphViewports.value
-  graphViewports.value = rest
 }
 
 function toggleGraphEdit(force) {
@@ -547,17 +583,6 @@ function toggleGraphEdit(force) {
     batchMode.value = false
     batchSelectedIds.value = []
   }
-}
-
-function onNodePositionChange(position) {
-  graphPositions.value = {
-    ...graphPositions.value,
-    [position.id]: {
-      x: Math.round(position.x),
-      y: Math.round(position.y),
-    },
-  }
-  saveGraphPositions()
 }
 
 function isNavAllowed(key) {
@@ -575,72 +600,8 @@ function onNavClick(key) {
 }
 
 async function selectCourse(courseId) {
-  if (currentCourseId.value === courseId) return
   recordGraphViewport()
-  currentCourseId.value = courseId
-  await onCourseChange()
-}
-
-async function fetchGraph() {
-  if (!currentCourseId.value) {
-    nodes.value = []
-    links.value = []
-    return
-  }
-  try {
-    const data = await graphApi.getGraph(selectedCategory.value || undefined, currentCourseId.value, props.user?.id)
-    nodes.value = data.nodes || []
-    links.value = data.links || []
-  } catch (e) {
-    console.error('加载知识图谱失败', e)
-  }
-}
-
-async function fetchCategories() {
-  if (!currentCourseId.value) {
-    categories.value = []
-    return
-  }
-  try {
-    categories.value = await graphApi.getCategories(currentCourseId.value)
-  } catch {
-    categories.value = []
-  }
-}
-
-async function fetchCourses() {
-  try {
-    courses.value = await courseApi.list()
-    if (!currentCourseId.value && courses.value.length) {
-      currentCourseId.value = courses.value[0].id
-      await onCourseChange()
-    }
-  } catch {
-    courses.value = []
-  }
-}
-
-async function fetchClasses() {
-  if (props.user?.role === 'teacher') {
-    try {
-      classes.value = await classroomApi.listClasses(props.user.id)
-    } catch {
-      classes.value = []
-    }
-  }
-}
-
-async function fetchMastery() {
-  if (!props.user?.id || !currentCourseId.value) return
-  try {
-    const data = await analyticsApi.calcMastery(props.user.id, currentCourseId.value)
-    const map = {}
-    for (const n of (data.nodes || [])) map[n.node_id] = { score: n.score, level: n.level }
-    masteryMap.value = map
-    masteredIds.value = Object.entries(map).filter(([, v]) => v.score >= 70).map(([id]) => id)
-  } catch {
-    masteryMap.value = {}
-  }
+  await setCourse(courseId, onCourseChange)
 }
 
 async function onCourseChange() {
@@ -648,37 +609,12 @@ async function onCourseChange() {
   selectedLink.value = null
   relationSourceId.value = ''
   batchSelectedIds.value = []
-  highlightedPath.value = []
-  highlightedPaths.value = []
+  clearPath()
   selectedCategory.value = ''
   loadGraphPositions()
   await fetchGraph()
   await fetchCategories()
   await fetchMastery()
-}
-
-async function onClassChange() {
-  if (heatmapMode.value) await fetchHeatmap()
-}
-
-async function toggleHeatmap() {
-  heatmapMode.value = !heatmapMode.value
-  if (heatmapMode.value && currentClassId.value) await fetchHeatmap()
-  else {
-    heatmapData.value = []
-    await fetchGraph()
-  }
-}
-
-async function fetchHeatmap() {
-  if (!currentClassId.value || !currentCourseId.value) return
-  try {
-    const data = await analyticsApi.classHeatmap(currentClassId.value, currentCourseId.value)
-    heatmapData.value = data.nodes || []
-    await fetchGraph()
-  } catch {
-    heatmapData.value = []
-  }
 }
 
 async function onSelectNode(node, meta = {}) {
@@ -738,11 +674,7 @@ function onLocateErrorNode(nodeId) {
 }
 
 function onPathFound(pathNodes, _totalTime, _type, pathGroups = []) {
-  highlightedPath.value = pathNodes.map(n => n.id)
-  highlightedPaths.value = pathGroups.map(group => ({
-    ...group,
-    nodes: (group.path || []).map(node => node.id),
-  }))
+  setPath(pathNodes, pathGroups)
 }
 
 async function onShowRoadmap(targetId) {
@@ -753,8 +685,7 @@ async function onShowRoadmap(targetId) {
 }
 
 function onClearPath() {
-  highlightedPath.value = []
-  highlightedPaths.value = []
+  clearPath()
 }
 
 function onAskAI(node) {
@@ -776,11 +707,7 @@ async function onManualMasteryUpdated(payload) {
   const nodeId = payload?.node_id
   const score = Number(payload?.score || 0)
   if (nodeId) {
-    const level = score >= 85 ? 'proficient' : score >= 60 ? 'fair' : score > 0 ? 'weak' : 'unlearned'
-    masteryMap.value = {
-      ...masteryMap.value,
-      [nodeId]: { ...(masteryMap.value[nodeId] || {}), score, level, manual_score: score },
-    }
+    const level = updateLocalMastery(nodeId, score)
     nodes.value = nodes.value.map(node => (
       node.id === nodeId
         ? { ...node, mastery_score: score, mastery_level: level, manual_score: score }
@@ -792,6 +719,14 @@ async function onManualMasteryUpdated(payload) {
   }
   await fetchMastery()
   await fetchGraph()
+}
+
+async function onTrainingSubmitted() {
+  await fetchMastery()
+  await fetchGraph()
+  if (selectedNode.value && pathRecommendRef.value?.fetchPath) {
+    await pathRecommendRef.value.fetchPath(selectedNode.value.id)
+  }
 }
 
 function zoomIn() {
@@ -809,8 +744,8 @@ async function onSaveNode(node, payload) {
     nodes.value = nodes.value.map(n => n.id === updated.id ? updated : n)
     selectedNode.value = updated
     await fetchCategories()
-  } catch {
-    alert('保存知识点失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '保存知识点失败', 'error')
   }
 }
 
@@ -834,8 +769,8 @@ async function createRelationByIds(source, target, type = 'PREREQUISITE', weight
     await graphApi.createRelation(source, target, type, weight)
     await fetchGraph()
     return true
-  } catch {
-    alert('建立关系失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '建立关系失败', 'error')
     return false
   }
 }
@@ -867,8 +802,8 @@ async function onSaveLink(link, payload) {
     )
     await fetchGraph()
     selectedLink.value = { ...updated, key: relationKey(updated) }
-  } catch {
-    alert('保存关系失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '保存关系失败', 'error')
   }
 }
 
@@ -878,8 +813,8 @@ async function onDeleteLink(link) {
     await graphApi.deleteRelation(normalizeId(link.source), normalizeId(link.target), link.type)
     selectedLink.value = null
     await fetchGraph()
-  } catch {
-    alert('删除关系失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '删除关系失败', 'error')
   }
 }
 
@@ -897,8 +832,8 @@ async function onBatchUpdate(payload) {
     await Promise.all(batchSelectedIds.value.map(id => knowledgeApi.update(id, payload)))
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('批量更新失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '批量更新失败', 'error')
   }
 }
 
@@ -910,8 +845,8 @@ async function onBatchDelete() {
     batchSelectedIds.value = []
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('批量删除失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '批量删除失败', 'error')
   }
 }
 
@@ -923,8 +858,8 @@ async function onCreateNodeFromEditor(payload) {
     selectedLink.value = null
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('创建知识点失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '创建知识点失败', 'error')
   }
 }
 
@@ -942,8 +877,8 @@ async function onCreateNode() {
     form.value = { name: '', category: '', difficulty: 1, estimated_time: 0, description: '' }
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('创建失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '创建失败', 'error')
   }
 }
 
@@ -951,15 +886,14 @@ async function onDeleteNode(node = selectedNode.value) {
   if (!node || !confirm('确认删除：' + node.name + '？')) return
   try {
     await knowledgeApi.delete(node.id)
-    delete graphPositions.value[node.id]
-    saveGraphPositions()
+    removeNodePosition(node.id)
     selectedNode.value = null
     selectedLink.value = null
     batchSelectedIds.value = batchSelectedIds.value.filter(id => id !== node.id)
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('删除失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '删除失败', 'error')
   }
 }
 
@@ -974,13 +908,13 @@ async function onCreateRelation() {
       key: `${relSource.value}->${relTarget.value}:${relType.value}`,
     }
     await fetchGraph()
-  } catch {
-    alert('建立关系失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '建立关系失败', 'error')
   }
 }
 
 onMounted(async () => {
-  await fetchCourses()
+  await loadCourses(onCourseChange)
   await fetchClasses()
 })
 </script>

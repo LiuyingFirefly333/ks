@@ -724,6 +724,20 @@ class Neo4jClient:
             )
             return [r["course"] for r in result]
 
+    def get_student_courses(self, student_id: str) -> list[dict]:
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (s:Student {id: $student_id})-[:BELONGS_TO]->(:Class)<-[:TEACHES]-(t:Teacher)-[:OWNS]->(c:Course)
+                OPTIONAL MATCH (n:KnowledgeNode)-[:BELONGS_TO]->(c)
+                WITH DISTINCT c, count(n) as node_count
+                RETURN c { .*, node_count: node_count } as course
+                ORDER BY course.name
+                """,
+                student_id=student_id,
+            )
+            return [r["course"] for r in result]
+
     # ===== 掌握度管理 =====
 
     def set_mastery(self, student_id: str, node_id: str, score: int) -> dict:
@@ -2212,8 +2226,10 @@ class Neo4jClient:
             weak_nodes = [r["node"] for r in result]
             weak_ids = [node["id"] for node in weak_nodes if node.get("id")]
             questions = self.select_questions_for_nodes(weak_ids, course_id, count)
+            used_fallback = False
             if not questions:
                 questions = self.select_questions_for_nodes([], course_id, count)
+                used_fallback = True
             paper_id = str(uuid.uuid4())
             session.run(
                 """
@@ -2245,6 +2261,15 @@ class Neo4jClient:
                 "weak_nodes": weak_nodes,
                 "questions": questions[:count],
                 "exercises": [],
+                "reason": (
+                    f"根据 {len(weak_nodes)} 个薄弱/错题关联知识点生成专项训练。"
+                    if weak_nodes and not used_fallback
+                    else "当前薄弱点缺少可用题目，已从课程题库中选择综合训练题。"
+                ),
+                "next_action": {
+                    "type": "answer",
+                    "label": "完成训练后查看错题依据和下一步复习建议",
+                },
             }
 
     def select_questions_for_nodes(self, node_ids: list[str], course_id: str = None,
@@ -2637,6 +2662,7 @@ class Neo4jClient:
             total_score = 0
             objective_score = 0
             pending = 0
+            wrong_count = 0
             attempts = []
             objective_types = {"single_choice", "multiple_choice", "true_false", "blank"}
             for record in records:
@@ -2654,6 +2680,8 @@ class Neo4jClient:
                     gained = score if is_correct else 0
                     objective_score += gained
                     status = "graded"
+                    if not is_correct:
+                        wrong_count += 1
                 else:
                     pending += 1
 
@@ -2739,8 +2767,17 @@ class Neo4jClient:
                 "total_score": total_score,
                 "objective_score": objective_score,
                 "subjective_pending": pending,
+                "wrong_count": wrong_count,
                 "attempts": attempts,
                 "status": "pending_review" if pending else "graded",
+                "next_action": {
+                    "type": "review_errors" if wrong_count else "continue_path",
+                    "label": (
+                        f"优先复盘 {wrong_count} 道错题关联的知识点"
+                        if wrong_count
+                        else "本次客观题表现稳定，继续推进学习路径"
+                    ),
+                },
             }
 
 
@@ -3254,6 +3291,28 @@ class Neo4jClient:
             ).single()
             return bool(r and r["ok"] > 0)
 
+    def student_can_access_course(self, student_id: str, course_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (s:Student {id: $student_id})-[:BELONGS_TO]->(:Class)<-[:TEACHES]-(t:Teacher)-[:OWNS]->(c:Course {id: $course_id})
+                RETURN count(c) as ok
+                """,
+                student_id=student_id, course_id=course_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def student_can_access_node(self, student_id: str, node_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (s:Student {id: $student_id})-[:BELONGS_TO]->(:Class)<-[:TEACHES]-(t:Teacher)-[:OWNS]->(c:Course)<-[:BELONGS_TO]-(n:KnowledgeNode {id: $node_id})
+                RETURN count(n) as ok
+                """,
+                student_id=student_id, node_id=node_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
     def can_teacher_edit_node(self, teacher_id: str, node_id: str) -> bool:
         with self.driver.session() as session:
             r = session.run(
@@ -3262,6 +3321,58 @@ class Neo4jClient:
                 RETURN count(n) as ok
                 """,
                 teacher_id=teacher_id, node_id=node_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def teacher_can_edit_resource(self, teacher_id: str, resource_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (t:Teacher {id: $teacher_id})-[:OWNS]->(c:Course)
+                MATCH (r:LearningResource {id: $resource_id})
+                WHERE (r)-[:BELONGS_TO]->(c)
+                   OR EXISTS { MATCH (r)-[:COVERS]->(:KnowledgeNode)-[:BELONGS_TO]->(c) }
+                RETURN count(DISTINCT r) as ok
+                """,
+                teacher_id=teacher_id, resource_id=resource_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def student_can_access_resource(self, student_id: str, resource_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (s:Student {id: $student_id})-[:BELONGS_TO]->(:Class)<-[:TEACHES]-(t:Teacher)-[:OWNS]->(c:Course)
+                MATCH (r:LearningResource {id: $resource_id})
+                WHERE coalesce(r.status, 'draft') = 'published'
+                  AND ((r)-[:BELONGS_TO]->(c)
+                    OR EXISTS { MATCH (r)-[:COVERS]->(:KnowledgeNode)-[:BELONGS_TO]->(c) })
+                RETURN count(DISTINCT r) as ok
+                """,
+                student_id=student_id, resource_id=resource_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def teacher_can_edit_question(self, teacher_id: str, question_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (t:Teacher {id: $teacher_id})-[:OWNS]->(c:Course)<-[:BELONGS_TO]-(n:KnowledgeNode)<-[:TESTS]-(q:Question {id: $question_id})
+                RETURN count(DISTINCT q) as ok
+                """,
+                teacher_id=teacher_id, question_id=question_id,
+            ).single()
+            return bool(r and r["ok"] > 0)
+
+    def student_can_access_question(self, student_id: str, question_id: str) -> bool:
+        with self.driver.session() as session:
+            r = session.run(
+                """
+                MATCH (s:Student {id: $student_id})-[:BELONGS_TO]->(:Class)<-[:TEACHES]-(t:Teacher)-[:OWNS]->(c:Course)<-[:BELONGS_TO]-(n:KnowledgeNode)<-[:TESTS]-(q:Question {id: $question_id})
+                WHERE coalesce(q.status, 'published') = 'published'
+                RETURN count(DISTINCT q) as ok
+                """,
+                student_id=student_id, question_id=question_id,
             ).single()
             return bool(r and r["ok"] > 0)
 

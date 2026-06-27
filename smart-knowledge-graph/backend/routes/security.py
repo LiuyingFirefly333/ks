@@ -1,5 +1,6 @@
 from functools import wraps
 from flask import g, jsonify, request
+from config import AUTH_COOKIE_NAME
 from models.neo4j_client import db
 from services.auth_service import auth_service
 
@@ -48,6 +49,9 @@ def _default_error_code(status):
 
 
 def current_token():
+    cookie_token = request.cookies.get(AUTH_COOKIE_NAME, "")
+    if cookie_token:
+        return cookie_token
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return auth[7:].strip()
@@ -109,6 +113,32 @@ def assert_self_or_roles(target_user_id, *roles):
     if role == "teacher" and "teacher" in roles and db.teacher_can_access_student(user_id, target_user_id):
         return None
     return legacy_fail("无权访问该用户数据", 403, "FORBIDDEN")
+
+
+def can_access_course(course_id):
+    if not course_id:
+        return current_role() == "admin"
+    role = current_role()
+    user_id = current_user_id()
+    if role == "admin":
+        return True
+    if role == "teacher":
+        return db.teacher_owns_course(user_id, course_id)
+    if role == "student":
+        return db.student_can_access_course(user_id, course_id)
+    return False
+
+
+def can_access_node(node_id):
+    role = current_role()
+    user_id = current_user_id()
+    if role == "admin":
+        return True
+    if role == "teacher":
+        return db.can_teacher_edit_node(user_id, node_id)
+    if role == "student":
+        return db.student_can_access_node(user_id, node_id)
+    return False
 
 
 def audit(action, target_type="", target_id="", detail=None):
