@@ -56,6 +56,35 @@
         </span>
       </div>
 
+      <div class="learning-explain-card">
+        <div>
+          <span class="explain-label">推荐原因</span>
+          <p>{{ recommendationReason }}</p>
+        </div>
+        <div>
+          <span class="explain-label">下一步动作</span>
+          <button
+            class="inline-action"
+            :disabled="!nextActionNode"
+            @click="locateNextAction"
+          >
+            {{ nextActionLabel }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="pathBasisText || pathScores.length" class="path-evidence-panel">
+        <div v-if="pathBasisText">
+          <span class="explain-label">推荐依据</span>
+          <p>{{ pathBasisText }}</p>
+        </div>
+        <div v-if="pathScores.length" class="path-score-row">
+          <span v-for="item in pathScores" :key="item.key" class="path-score-chip">
+            {{ item.label }} {{ item.value }}
+          </span>
+        </div>
+      </div>
+
       <div class="path-timeline">
         <div
           v-for="task in tasks"
@@ -132,6 +161,37 @@ const weakPrerequisites = computed(() => currentPath.value.weak_prerequisites ||
 const totalTime = computed(() => currentPath.value.total_estimated_time || 0)
 const completedCount = computed(() => currentPath.value.completed_count || 0)
 const progress = computed(() => currentPath.value.progress || 0)
+const recommendationReason = computed(() => {
+  if (currentPath.value.reason) return currentPath.value.reason
+  if (weakPrerequisites.value.length) return `检测到 ${weakPrerequisites.value.length} 个薄弱前置知识，因此优先展示完整补齐路径。`
+  return `${currentTypeLabel.value}会结合掌握度、前置关系和预计学习时间生成任务顺序。`
+})
+const pathBasisText = computed(() => {
+  const basis = currentPath.value.basis || {}
+  const weakCount = basis.weak_prerequisites?.length || 0
+  const masteryCount = (basis.mastery || []).filter(item => item.score > 0).length
+  const edgeCount = basis.prerequisite_edges?.length || 0
+  const parts = []
+  if (masteryCount) parts.push(`${masteryCount} 个已有掌握度记录`)
+  if (weakCount) parts.push(`${weakCount} 个薄弱前置知识`)
+  if (edgeCount) parts.push(`${edgeCount} 条前置关系`)
+  return parts.length ? `本路径依据 ${parts.join('、')} 生成。` : ''
+})
+const pathScores = computed(() => {
+  const scores = currentPath.value.scores || {}
+  return [
+    { key: 'time', label: '时间', value: scores.time },
+    { key: 'difficulty', label: '难度', value: scores.difficulty },
+    { key: 'coverage', label: '覆盖', value: scores.coverage },
+  ].filter(item => Number.isFinite(Number(item.value)))
+})
+const nextActionLabel = computed(() => currentPath.value.next_action?.label || fallbackNextAction()?.label || '继续完成路径任务')
+const nextActionNode = computed(() => {
+  const action = currentPath.value.next_action
+  if (action?.node_id) return { id: action.node_id, name: action.node_name }
+  const task = fallbackNextAction()?.task
+  return task ? taskToNode(task) : null
+})
 const currentTypeMeta = computed(() => pathTypes.find(item => item.key === currentType.value) || pathTypes[0])
 const currentTypeColor = computed(() => currentTypeMeta.value.color)
 const currentTypeLabel = computed(() => currentTypeMeta.value.label)
@@ -153,6 +213,16 @@ const availablePathSummaries = computed(() => pathTypes
 function switchPath(type) {
   if (!pathResults.value[type]?.path?.length) return
   currentType.value = type
+}
+
+function fallbackNextAction() {
+  const task = tasks.value.find(item => item.status !== 'completed')
+  if (!task) return { label: '当前路径已完成，进入专项训练巩固', task: null }
+  return { label: `先处理：${task.name}`, task }
+}
+
+function locateNextAction() {
+  if (nextActionNode.value) emit('locate', nextActionNode.value)
 }
 
 async function fetchPath(targetId) {
@@ -252,6 +322,10 @@ function normalizePathPayload(data, type) {
     total_estimated_time: data.total_estimated_time || 0,
     completed_count: data.completed_count || 0,
     progress: data.progress || 0,
+    reason: data.reason || '',
+    next_action: data.next_action || null,
+    basis: data.basis || {},
+    scores: data.scores || {},
   }
 }
 

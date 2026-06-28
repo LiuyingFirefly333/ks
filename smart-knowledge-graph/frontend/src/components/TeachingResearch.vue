@@ -162,6 +162,7 @@
 <script setup>
 import { onMounted, reactive, ref, watch } from 'vue'
 import { teachingApi } from '../api/index.js'
+import { useToast } from '../composables/useToast.js'
 
 const props = defineProps({
   courseId: { type: String, default: '' },
@@ -171,6 +172,7 @@ const props = defineProps({
 const emit = defineEmits(['graph-updated'])
 
 const busy = ref(false)
+const { showToast } = useToast()
 const stats = ref({ summary: {}, nodes: [], by_type: [] })
 const uploadFile = ref(null)
 const outlineFile = ref(null)
@@ -217,7 +219,7 @@ async function downloadMindmap() {
     const blob = await teachingApi.exportMindmap(props.courseId)
     downloadBlob(blob, 'course-mindmap.mm')
   } catch (err) {
-    alert(err.normalizedMessage || '导出思维导图失败')
+    showToast(err.normalizedMessage || '导出思维导图失败', 'error')
   } finally {
     busy.value = false
   }
@@ -238,9 +240,9 @@ async function uploadResource() {
     uploadForm.title = ''
     uploadForm.description = ''
     uploadForm.node_ids = []
-    alert('上传成功')
+    showToast('上传成功', 'success')
   } catch (err) {
-    alert(err.normalizedMessage || '上传失败')
+    showToast(err.normalizedMessage || '上传失败', 'error')
   } finally {
     busy.value = false
   }
@@ -256,7 +258,7 @@ async function extractKnowledge() {
       category: extractCategory.value || 'LLM 自动抽取',
     })
   } catch (err) {
-    alert(err.normalizedMessage || '抽取失败')
+    showToast(err.normalizedMessage || '抽取失败', 'error')
   } finally {
     busy.value = false
   }
@@ -273,9 +275,9 @@ async function commitExtractedText() {
     const result = await teachingApi.importOutline(formData)
     draft.value = { nodes: result.nodes || [], relations: result.relations || [], source: result.source }
     emit('graph-updated')
-    alert(`写入完成：${result.created_nodes || 0} 个知识点，${result.created_relations || 0} 条关系`)
+    showToast(`写入完成：${result.created_nodes || 0} 个知识点，${result.created_relations || 0} 条关系`, 'success')
   } catch (err) {
-    alert(err.normalizedMessage || '写入图谱失败')
+    showToast(err.normalizedMessage || '写入图谱失败', 'error')
   } finally {
     busy.value = false
   }
@@ -302,10 +304,10 @@ async function submitOutline(commit) {
     draft.value = { nodes: result.nodes || [], relations: result.relations || [], source: result.source }
     if (commit) {
       emit('graph-updated')
-      alert(`建图完成：${result.created_nodes || 0} 个知识点，${result.created_relations || 0} 条关系`)
+      showToast(`建图完成：${result.created_nodes || 0} 个知识点，${result.created_relations || 0} 条关系`, 'success')
     }
   } catch (err) {
-    alert(err.normalizedMessage || '课程大纲处理失败')
+    showToast(err.normalizedMessage || '课程大纲处理失败', 'error')
   } finally {
     busy.value = false
   }

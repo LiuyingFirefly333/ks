@@ -1,6 +1,7 @@
 <template>
   <div ref="container" class="graph-wrapper">
     <div class="graph-toolbar-top graph-layout-toolbar">
+      <span class="graph-toolbar-label">视图</span>
       <div class="graph-mode-switch">
         <button :class="{ active: layoutMode === 'force' }" @click="setLayout('force')" title="力导向布局">
           力导向
@@ -9,14 +10,6 @@
           分层
         </button>
       </div>
-      <span class="toolbar-sep"></span>
-      <span class="graph-stat-chip">{{ props.nodes.length }} 点</span>
-      <span class="graph-stat-chip">{{ props.links.length }} 边</span>
-      <span class="toolbar-sep"></span>
-      <button @click="fitToScreen" title="适应画布">适应</button>
-      <button @click="exportSVG" title="导出 SVG 图片">SVG</button>
-      <button @click="exportJSON" title="导出 JSON 数据">JSON</button>
-      <button @click="exportCSV" title="导出 CSV 表格">CSV</button>
     </div>
 
     <div class="graph-mode-label">
@@ -32,6 +25,28 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as d3 from 'd3'
 import dagreModule from 'dagre'
+import {
+  CATEGORY_COLORS,
+  MASTERY_COLORS,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  NODE_H,
+  NODE_W,
+  VIEW_PADDING,
+  getHeatColor,
+  hashColor,
+} from './graph/graphConfig.js'
+import {
+  highlightedPathGroups as buildHighlightedPathGroups,
+  nodePathMatches,
+  normalizeId,
+  pathEdgeSet as buildPathEdgeSet,
+  pathLabelForLink,
+  pathMatchForLink,
+  pathMatchesForLink,
+  pathNodeColors,
+  pathNodeMap as buildPathNodeMap,
+} from './graph/pathHighlight.js'
 
 const dagre = dagreModule.default || dagreModule
 
@@ -69,56 +84,10 @@ let resizeObserver = null
 let currentNodes = []
 let currentLinks = []
 
-const NODE_W = 172
-const NODE_H = 58
-const MIN_ZOOM = 0.18
-const MAX_ZOOM = 3.5
-const VIEW_PADDING = 76
-
 const layoutTitle = computed(() => layoutMode.value === 'dagre' ? 'Dagre 分层视图' : '力导向关系视图')
 const layoutHint = computed(() => layoutMode.value === 'dagre'
   ? '适合章节依赖、学习路径和前置关系梳理'
   : '适合观察跨章节关联、知识团簇和网状关系')
-
-const CATEGORY_COLORS = {
-  '高等数学-基础': '#2563eb',
-  '高等数学-极限': '#16a34a',
-  '高等数学-导数': '#f59e0b',
-  '高等数学-积分': '#0891b2',
-  '高等数学-微分方程': '#dc2626',
-}
-
-const MASTERY_COLORS = {
-  proficient: '#16a34a',
-  fair: '#f59e0b',
-  weak: '#f97316',
-  unlearned: '#94a3b8',
-}
-
-const HEAT_COLORS = ['#16a34a', '#84cc16', '#f59e0b', '#f97316', '#ef4444', '#b91c1c']
-const DEFAULT_PATH_STYLES = {
-  shortest: { label: '最短路径', color: '#ef4444' },
-  easy: { label: '最轻松', color: '#16a34a' },
-  thorough: { label: '最扎实', color: '#2563eb' },
-  roadmap: { label: '路线图', color: '#7c3aed' },
-}
-
-function getHeatColor(avgScore) {
-  if (avgScore >= 85) return HEAT_COLORS[0]
-  if (avgScore >= 70) return HEAT_COLORS[1]
-  if (avgScore >= 55) return HEAT_COLORS[2]
-  if (avgScore >= 40) return HEAT_COLORS[3]
-  if (avgScore > 0) return HEAT_COLORS[4]
-  return '#94a3b8'
-}
-
-function hashColor(key) {
-  const palette = ['#2563eb', '#0f766e', '#7c3aed', '#db2777', '#0891b2', '#ea580c', '#475569']
-  const value = String(key || '未分类')
-  let hash = 0
-  for (let i = 0; i < value.length; i++) hash = (hash + value.charCodeAt(i) * (i + 1)) % palette.length
-  return palette[hash]
-}
 
 function getColor(node) {
   if (props.heatmapMode) {
@@ -142,93 +111,19 @@ function getNodeState(node) {
 }
 
 function isInPath(nodeId) {
-  return nodePathMatches(nodeId).length > 0
-}
-
-function normalizeHighlightedPath(group, index = 0) {
-  if (Array.isArray(group)) {
-    return {
-      type: index === 0 ? 'shortest' : `path-${index + 1}`,
-      label: index === 0 ? '推荐路径' : `路径 ${index + 1}`,
-      color: ['#ef4444', '#16a34a', '#2563eb'][index] || '#7c3aed',
-      nodes: group.map(normalizeId).filter(Boolean),
-    }
-  }
-
-  const type = group?.type || `path-${index + 1}`
-  const defaults = DEFAULT_PATH_STYLES[type] || {}
-  const rawNodes = group?.nodes || group?.path || []
-  return {
-    type,
-    label: group?.label || defaults.label || `路径 ${index + 1}`,
-    color: group?.color || defaults.color || '#7c3aed',
-    nodes: rawNodes.map(normalizeId).filter(Boolean),
-    total_estimated_time: group?.total_estimated_time || 0,
-  }
+  return nodePathMatches(nodeId, highlightedPathGroups()).length > 0
 }
 
 function highlightedPathGroups() {
-  if (props.highlightedPaths.length) {
-    return props.highlightedPaths.map(normalizeHighlightedPath).filter(group => group.nodes.length)
-  }
-  if (props.highlightedPath.length) return [normalizeHighlightedPath(props.highlightedPath, 0)]
-  return []
-}
-
-function nodePathMatches(nodeId) {
-  return highlightedPathGroups().filter(group => group.nodes.includes(nodeId))
+  return buildHighlightedPathGroups(props.highlightedPaths, props.highlightedPath)
 }
 
 function pathEdgeSet() {
-  const map = new Map()
-  highlightedPathGroups().forEach(group => {
-    for (let i = 0; i < group.nodes.length - 1; i++) {
-      const key = `${group.nodes[i]}->${group.nodes[i + 1]}`
-      const matches = map.get(key) || []
-      matches.push(group)
-      map.set(key, matches)
-    }
-  })
-  return map
+  return buildPathEdgeSet(highlightedPathGroups())
 }
 
 function pathNodeMap() {
-  const map = new Map()
-  highlightedPathGroups().forEach(group => {
-    group.nodes.forEach(nodeId => {
-      const matches = map.get(nodeId) || []
-      matches.push(group)
-      map.set(nodeId, matches)
-    })
-  })
-  return map
-}
-
-function pathMatchesForLink(link, pathSet = pathEdgeSet()) {
-  const source = normalizeId(link.source)
-  const target = normalizeId(link.target)
-  return pathSet.get(`${source}->${target}`) || []
-}
-
-function pathMatchForLink(link, pathSet = pathEdgeSet()) {
-  return pathMatchesForLink(link, pathSet)[0] || null
-}
-
-function pathLabelForLink(link, pathSet = pathEdgeSet()) {
-  const matches = pathMatchesForLink(link, pathSet)
-  if (!matches.length) return ''
-  return matches.map(item => item.label).join(' / ')
-}
-
-function pathNodeColors(nodeId, nodeMap = pathNodeMap()) {
-  const seen = new Set()
-  return (nodeMap.get(nodeId) || [])
-    .filter(group => {
-      if (seen.has(group.type)) return false
-      seen.add(group.type)
-      return true
-    })
-    .map(group => group.color)
+  return buildPathNodeMap(highlightedPathGroups())
 }
 
 function isPathLink(link, pathSet = pathEdgeSet()) {
@@ -283,10 +178,6 @@ function linkMarker(link, pathSet) {
   const match = pathMatchForLink(link, pathSet)
   if (match) return `url(#arrow-path-${match.type})`
   return isRelatedLink(link) ? null : 'url(#arrow-prerequisite)'
-}
-
-function normalizeId(value) {
-  return typeof value === 'object' ? value.id : value
 }
 
 function displayCategory(category) {
@@ -968,5 +859,5 @@ onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect()
 })
 
-defineExpose({ fitToScreen, locateNode, zoomBy, getViewport: currentViewport })
+defineExpose({ fitToScreen, locateNode, zoomBy, exportSVG, exportJSON, exportCSV, getViewport: currentViewport })
 </script>

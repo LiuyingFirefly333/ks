@@ -1,11 +1,16 @@
 from io import BytesIO
+from pathlib import Path
+from uuid import uuid4
 
 from flask import Blueprint, jsonify, request, send_file
+from werkzeug.utils import secure_filename
 
 from models.neo4j_client import db
 from routes.security import audit, current_role, current_user_id, legacy_fail, require_roles
 
 bp = Blueprint("profile", __name__, url_prefix="/api/profile")
+AVATAR_UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads" / "avatars"
+ALLOWED_AVATAR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 
 @bp.route("", methods=["GET"])
@@ -35,6 +40,31 @@ def update_profile():
     if not profile:
         return legacy_fail("用户不存在", 404, "USER_NOT_FOUND")
     audit("profile.update", current_role(), current_user_id(), {"fields": list(updates.keys())})
+    return jsonify({"profile": profile, "role": current_role(), "success": True})
+
+
+@bp.route("/avatar", methods=["POST"])
+@require_roles("student", "teacher", "admin")
+def upload_avatar():
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return legacy_fail("请选择要上传的头像图片", 400, "VALIDATION_ERROR")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_AVATAR_EXTENSIONS:
+        return legacy_fail("头像仅支持 JPG、PNG、GIF 或 WebP 图片", 400, "VALIDATION_ERROR")
+
+    AVATAR_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = secure_filename(file.filename) or f"avatar{ext}"
+    stored_name = f"{current_role()}-{current_user_id()}-{uuid4().hex}-{safe_name}"
+    target = AVATAR_UPLOAD_DIR / stored_name
+    file.save(target)
+
+    avatar_url = f"/uploads/avatars/{stored_name}"
+    profile = db.update_user_profile(current_role(), current_user_id(), {"avatar_url": avatar_url})
+    if not profile:
+        return legacy_fail("用户不存在", 404, "USER_NOT_FOUND")
+    audit("profile.avatar.upload", current_role(), current_user_id(), {"avatar_url": avatar_url})
     return jsonify({"profile": profile, "role": current_role(), "success": True})
 
 

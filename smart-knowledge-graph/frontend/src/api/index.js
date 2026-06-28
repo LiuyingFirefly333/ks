@@ -1,13 +1,16 @@
 import axios from 'axios'
 
+import { getAuthToken } from '../services/authStorage.js'
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 10000,
+  withCredentials: true,
   headers: { 'Content-Type': 'application/json' },
 })
 
 api.interceptors.request.use(config => {
-  const token = localStorage.getItem('token')
+  const token = getAuthToken()
   if (token) {
     config.headers.Authorization = 'Bearer ' + token
   }
@@ -42,6 +45,8 @@ export const authApi = {
     api.post('/auth/admin/register', { name, email, password }).then(r => r.data),
   loginAdmin: (email, password) =>
     api.post('/auth/admin/login', { email, password }).then(r => r.data),
+  refresh: () => api.post('/auth/refresh').then(r => r.data),
+  logout: () => api.post('/auth/logout').then(r => r.data),
 }
 
 // Courses
@@ -139,9 +144,10 @@ export const qaApi = {
   ask: (question, courseId, nodeId, sessionId) =>
     api.post('/qa/ask', { question, course_id: courseId, node_id: nodeId, session_id: sessionId }).then(r => r.data),
   askStream: (question, courseId, nodeId, sessionId, onToken, onSources, onDone, onError) => {
-    const token = localStorage.getItem('token')
+    const token = getAuthToken()
     return fetch('/api/qa/ask/stream', {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: 'Bearer ' + token } : {}),
@@ -208,6 +214,8 @@ export const teachingApi = {
 export const profileApi = {
   get: () => api.get('/profile').then(r => r.data),
   update: (payload) => api.put('/profile', payload).then(r => r.data),
+  uploadAvatar: (formData) =>
+    api.post('/profile/avatar', formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data),
   stats: (courseId) => api.get('/profile/stats', { params: { course_id: courseId } }).then(r => r.data),
   growth: (courseId, semester) =>
     api.get('/profile/growth', { params: { course_id: courseId, semester } }).then(r => r.data),
@@ -257,12 +265,12 @@ export const adminApi = {
   exportUsers: () => api.get('/admin/users/export', { responseType: 'blob' }).then(r => r.data),
   disableUser: (type, id) => api.post('/admin/users/' + type + '/' + id + '/disable').then(r => r.data),
   validateGraph: () => api.get('/admin/graph/validate').then(r => r.data),
-  fixGraphIssue: (issue) => api.post('/admin/graph/fix', { issue }).then(r => r.data),
+  fixGraphIssue: (issue) => api.post('/admin/graph/fix', { issue, confirm: true }).then(r => r.data),
   listGraphBackups: () => api.get('/admin/graph/backups').then(r => r.data),
   createGraphBackup: (label) => api.post('/admin/graph/backup', { label }).then(r => r.data),
-  cleanGraphData: () => api.post('/admin/graph/clean').then(r => r.data),
-  cleanupRedundantNodes: () => api.post('/admin/graph/cleanup-redundant').then(r => r.data),
-  incrementalUpdate: (payload) => api.post('/admin/graph/incremental-update', payload).then(r => r.data),
+  cleanGraphData: () => api.post('/admin/graph/clean', { confirm: true }).then(r => r.data),
+  cleanupRedundantNodes: () => api.post('/admin/graph/cleanup-redundant', { confirm: true }).then(r => r.data),
+  incrementalUpdate: (payload) => api.post('/admin/graph/incremental-update', { ...payload, confirm: true }).then(r => r.data),
   dashboard: (params = {}) => {
     const query = typeof params === 'string' ? { course_id: params } : params
     return api.get('/admin/dashboard', { params: query }).then(r => r.data)

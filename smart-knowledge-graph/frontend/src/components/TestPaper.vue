@@ -30,6 +30,19 @@
       </span>
     </div>
 
+    <div v-if="paperId" class="learning-explain-card test-explain-card">
+      <div>
+        <span class="explain-label">出题依据</span>
+        <p>{{ paperReason }}</p>
+      </div>
+      <div>
+        <span class="explain-label">下一步动作</span>
+        <button class="inline-action" @click="handleNextAction">
+          {{ testNextAction }}
+        </button>
+      </div>
+    </div>
+
     <div v-if="paperId && questions.length" class="test-exercises online-paper">
       <div class="section-title">
         在线训练题 <span>{{ questions.length }}</span>
@@ -98,6 +111,19 @@
           <b v-if="result.subjective_pending"> · {{ result.subjective_pending }} 题待教师批阅</b>
         </span>
       </div>
+
+      <div v-if="submitted" class="learning-explain-card result-explain-card">
+        <div>
+          <span class="explain-label">结果解释</span>
+          <p>{{ resultReason }}</p>
+        </div>
+        <div>
+          <span class="explain-label">下一步动作</span>
+          <button class="inline-action" @click="handleNextAction">
+            {{ testNextAction }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <div v-if="paperId && !questions.length && !loading" class="empty-state">
@@ -107,14 +133,16 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { examApi } from '../api/index.js'
+import { useToast } from '../composables/useToast.js'
 
 const props = defineProps({
   studentId: { type: String, default: '' },
   courseId: { type: String, default: '' },
 })
-defineEmits(['locate-node'])
+const emit = defineEmits(['locate-node', 'training-submitted'])
+const { showToast } = useToast()
 
 const loading = ref(false)
 const paperId = ref('')
@@ -122,8 +150,28 @@ const weakNodes = ref([])
 const questions = ref([])
 const submitted = ref(false)
 const result = ref({})
+const paperReason = ref('')
+const generatedNextAction = ref(null)
 const questionCount = ref(10)
 const answers = reactive({})
+
+const wrongAttempts = computed(() => (result.value.attempts || []).filter(item => item.status !== 'pending_review' && !item.is_correct))
+const resultReason = computed(() => {
+  if (!submitted.value) return ''
+  const totalObjective = (result.value.attempts || []).filter(item => item.status !== 'pending_review').length
+  if (result.value.subjective_pending) {
+    return `本次有 ${result.value.subjective_pending} 道主观题等待教师批阅，客观题已即时反馈。`
+  }
+  if (wrongAttempts.value.length) {
+    const nodes = uniqueWrongNodeNames().slice(0, 3).join('、')
+    return `本次错题集中在 ${nodes || '相关知识点'}，这些题已进入错题反馈链路。`
+  }
+  return totalObjective ? '本次客观题全部通过，说明当前训练覆盖的知识点掌握较稳定。' : '训练已提交，等待进一步反馈。'
+})
+const testNextAction = computed(() => {
+  if (submitted.value && result.value.next_action?.label) return result.value.next_action.label
+  return generatedNextAction.value?.label || '提交训练后查看复盘建议'
+})
 
 async function generate() {
   if (!props.studentId) return
@@ -136,10 +184,14 @@ async function generate() {
     paperId.value = data.id || ''
     weakNodes.value = data.weak_nodes || []
     questions.value = data.questions || []
+    paperReason.value = data.reason || buildPaperReason()
+    generatedNextAction.value = data.next_action || null
   } catch {
     paperId.value = ''
     weakNodes.value = []
     questions.value = []
+    paperReason.value = ''
+    generatedNextAction.value = null
   } finally {
     loading.value = false
   }
@@ -157,8 +209,9 @@ async function submit() {
     }))
     result.value = await examApi.submitTest(paperId.value, payload)
     submitted.value = true
+    emit('training-submitted', result.value)
   } catch (err) {
-    alert(err.normalizedMessage || '提交失败')
+    showToast(err.normalizedMessage || '提交失败', 'error')
   } finally {
     loading.value = false
   }
@@ -209,6 +262,33 @@ function resultText(questionId) {
   if (!attempt) return ''
   if (attempt.status === 'pending_review') return '待教师批阅'
   return attempt.is_correct ? `正确，得 ${attempt.score} 分` : '错误，已加入错题本'
+}
+
+function buildPaperReason() {
+  if (weakNodes.value.length) return `根据 ${weakNodes.value.length} 个薄弱/错题关联知识点生成专项训练。`
+  return '当前薄弱点缺少可用题目，已从课程题库中选择综合训练题。'
+}
+
+function uniqueWrongNodeNames() {
+  const names = []
+  for (const attempt of wrongAttempts.value) {
+    for (const node of attempt.knowledge_nodes || []) {
+      if (node?.name && !names.includes(node.name)) names.push(node.name)
+    }
+  }
+  return names
+}
+
+function handleNextAction() {
+  if (submitted.value && wrongAttempts.value.length) {
+    const node = wrongAttempts.value[0].knowledge_nodes?.[0]
+    if (node?.id) {
+      emit('locate-node', node.id)
+      return
+    }
+  }
+  const node = weakNodes.value[0]
+  if (node?.id) emit('locate-node', node.id)
 }
 
 function firstNodeName(question) {

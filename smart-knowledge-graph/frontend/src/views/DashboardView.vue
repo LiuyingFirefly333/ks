@@ -2,23 +2,30 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="topbar-brand">
-        <span class="brand-mark">KG</span>
+        <span class="brand-mark" aria-hidden="true">
+          <svg class="brand-logo-icon" viewBox="0 0 24 24">
+            <circle cx="6" cy="8" r="2.4" />
+            <circle cx="18" cy="7" r="2.4" />
+            <circle cx="12" cy="18" r="2.6" />
+            <path d="M8.3 7.8l7.4-.6" />
+            <path d="M7.3 10l3.8 5.8" />
+            <path d="M16.8 9.2l-3.6 6.5" />
+          </svg>
+        </span>
         <div>
           <div class="brand-text">智能知识图谱学习系统</div>
           <div class="brand-subtitle">Knowledge Graph Learning Workspace</div>
         </div>
       </div>
 
-      <div class="topbar-center workspace-title">
-        <span>{{ currentNavLabel }}</span>
-        <small>{{ currentNavHint }}</small>
-      </div>
-
       <div class="topbar-user">
         <span class="user-role-badge">{{ roleLabel }}</span>
-        <span class="user-name">{{ user?.name || '未命名用户' }}</span>
-        <button class="ghost-button" @click="switchNav('profile')">个人中心</button>
-        <button class="ghost-button" @click="$emit('logout')">退出</button>
+        <span class="user-name">{{ displayName }}</span>
+        <button class="avatar-button" :title="'个人中心：' + displayName" aria-label="打开个人中心" @click="switchNav('profile')">
+          <img v-if="user?.avatar_url" :src="user.avatar_url" :alt="displayName + '的头像'" />
+          <span v-else class="avatar-fallback">{{ userInitials }}</span>
+        </button>
+        <button class="logout-button" @click="$emit('logout')">退出</button>
       </div>
     </header>
 
@@ -33,70 +40,133 @@
           </div>
 
           <nav class="sidebar-nav" aria-label="功能导航">
-            <button
-              v-for="item in navItems"
-              :key="item.key"
-              class="sidebar-nav-item"
-              :class="{ active: activeNav === item.key }"
-              :title="item.hint"
-              @click="onNavClick(item.key)"
-            >
-              <span class="sidebar-nav-icon">{{ item.icon }}</span>
-              <span>
-                <b>{{ item.label }}</b>
-                <small>{{ item.hint }}</small>
-              </span>
-            </button>
+            <div v-for="group in navGroups" :key="group.title" class="sidebar-nav-group">
+              <div class="sidebar-nav-group-title">{{ group.title }}</div>
+              <button
+                v-for="item in group.items"
+                :key="item.key"
+                class="sidebar-nav-item"
+                :class="{ active: activeNav === item.key }"
+                :title="item.hint"
+                @click="onNavClick(item.key)"
+              >
+                <span class="sidebar-nav-icon" v-html="item.icon"></span>
+                <span>
+                  <b>{{ item.label }}</b>
+                  <small>{{ item.hint }}</small>
+                </span>
+              </button>
+            </div>
           </nav>
         </section>
 
-        <section class="sidebar-section course-section">
+        <section v-if="showNextAction" class="sidebar-section next-action-section">
+          <button
+            type="button"
+            class="next-action-close"
+            aria-label="关闭下一步建议"
+            title="关闭"
+            @click="showNextAction = false"
+          >
+            ×
+          </button>
           <div class="course-sidebar-head">
-          <div>
-            <span class="sidebar-eyebrow">课程</span>
-            <h2>学习课程</h2>
+            <div>
+              <span class="sidebar-eyebrow">下一步</span>
+              <h2>{{ primaryAction.title }}</h2>
+            </div>
           </div>
-          <span class="course-count">{{ courses.length }}</span>
-          </div>
-
-          <div v-if="!courses.length" class="empty-state compact">暂无课程</div>
-
-          <div v-else class="course-list">
-            <button
-              v-for="c in courses"
-              :key="c.id"
-              class="course-item"
-              :class="{ active: currentCourseId === c.id }"
-              :title="c.name"
-              @click="selectCourse(c.id)"
-            >
-              <span class="course-name">{{ c.name }}</span>
-              <span v-if="currentCourseId === c.id" class="course-status">当前</span>
-            </button>
-          </div>
+          <p>{{ primaryAction.text }}</p>
+          <button class="soft-button full-width" @click="switchNav(primaryAction.nav)">
+            {{ primaryAction.cta }}
+          </button>
         </section>
 
-        <div v-if="user?.role === 'teacher'" class="sidebar-controls">
-          <div class="form-row">
-            <label>班级视图</label>
-            <select v-model="currentClassId" @change="onClassChange" class="sidebar-select">
-              <option value="">全部班级</option>
-              <option v-for="c in classes" :key="c.id" :value="c.id">{{ c.name }}</option>
-            </select>
-          </div>
-
-          <button
-            class="soft-button full-width"
-            :class="{ active: heatmapMode }"
-            @click="toggleHeatmap"
-          >
-            {{ heatmapMode ? '关闭热力图' : '班级热力图' }}
-          </button>
-        </div>
       </aside>
 
       <main class="main-content" :class="{ 'workspace-main': activeNav !== 'graph' }">
         <div v-if="activeNav === 'graph'" class="graph-stage">
+          <div class="graph-course-switcher" :class="{ 'has-class-view': user?.role === 'teacher' }">
+            <div class="top-course-switcher">
+              <span class="top-course-kicker">当前课程</span>
+              <span class="top-course-select-wrap">
+                <button
+                  type="button"
+                  class="top-course-trigger"
+                  :disabled="!courses.length"
+                  aria-label="切换课程"
+                  aria-haspopup="listbox"
+                  :aria-expanded="courseMenuOpen"
+                  @click="courseMenuOpen = !courseMenuOpen; classMenuOpen = false"
+                >
+                  <span>{{ currentCourseName }}</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                <div v-if="courseMenuOpen" class="top-course-menu" role="listbox">
+                  <button
+                    v-for="course in courses"
+                    :key="course.id"
+                    type="button"
+                    class="top-course-option"
+                    :class="{ active: currentCourseId === course.id }"
+                    role="option"
+                    :aria-selected="currentCourseId === course.id"
+                    @click="chooseCourse(course.id)"
+                  >
+                    <span>{{ course.name }}</span>
+                    <b v-if="currentCourseId === course.id">当前</b>
+                  </button>
+                </div>
+              </span>
+            </div>
+
+            <div v-if="user?.role === 'teacher'" class="top-course-switcher top-class-switcher">
+              <span class="top-course-kicker">班级视图</span>
+              <span class="top-course-select-wrap">
+                <button
+                  type="button"
+                  class="top-course-trigger"
+                  aria-label="切换班级视图"
+                  aria-haspopup="listbox"
+                  :aria-expanded="classMenuOpen"
+                  @click="classMenuOpen = !classMenuOpen; courseMenuOpen = false"
+                >
+                  <span>{{ currentClassName }}</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                <div v-if="classMenuOpen" class="top-course-menu" role="listbox">
+                  <button
+                    type="button"
+                    class="top-course-option"
+                    :class="{ active: !currentClassId }"
+                    role="option"
+                    :aria-selected="!currentClassId"
+                    @click="chooseClass('')"
+                  >
+                    <span>全部班级</span>
+                    <b v-if="!currentClassId">当前</b>
+                  </button>
+                  <button
+                    v-for="c in classes"
+                    :key="c.id"
+                    type="button"
+                    class="top-course-option"
+                    :class="{ active: currentClassId === c.id }"
+                    role="option"
+                    :aria-selected="currentClassId === c.id"
+                    @click="chooseClass(c.id)"
+                  >
+                    <span>{{ c.name }}</span>
+                    <b v-if="currentClassId === c.id">当前</b>
+                  </button>
+                </div>
+              </span>
+            </div>
+          </div>
           <KnowledgeGraph
             ref="graphRef"
             :nodes="nodes"
@@ -129,7 +199,7 @@
           </div>
         </div>
 
-        <div v-if="activeNav === 'graph'" class="floating-tools">
+        <div v-if="activeNav === 'graph'" class="graph-action-tools">
           <button
             v-if="canEditGraph"
             :class="{ active: graphEditMode }"
@@ -138,20 +208,88 @@
           >
             {{ graphEditMode ? '完成' : '编辑' }}
           </button>
-          <button title="放大" @click="zoomIn">+</button>
-          <button title="缩小" @click="zoomOut">-</button>
+          <div class="graph-export-dropdown">
+            <button
+              class="graph-export-button"
+              :class="{ active: exportMenuOpen }"
+              title="导出图谱"
+              @click="exportMenuOpen = !exportMenuOpen"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v11" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M5 21h14" />
+              </svg>
+              导出图谱
+            </button>
+            <div v-if="exportMenuOpen" class="graph-export-menu">
+              <button @click="exportGraph('svg')">SVG 图片</button>
+              <button @click="exportGraph('json')">JSON 数据</button>
+              <button @click="exportGraph('csv')">CSV 表格</button>
+            </div>
+          </div>
+          <label
+            v-if="user?.role === 'teacher'"
+            class="graph-heatmap-switch"
+            :class="{ active: heatmapMode }"
+          >
+            <span>班级热力图</span>
+            <input
+              type="checkbox"
+              :checked="heatmapMode"
+              aria-label="切换班级热力图"
+              @change="toggleHeatmap"
+            />
+            <i aria-hidden="true"></i>
+          </label>
         </div>
 
-        <div v-if="activeNav === 'graph'" class="floating-legend">
-          <div class="legend-title">图例</div>
-          <div class="legend-row"><span class="ldot" style="background:#2563eb"></span>知识点</div>
-          <div class="legend-row"><span class="ldot" style="background:#16a34a"></span>熟练</div>
-          <div class="legend-row"><span class="ldot" style="background:#f59e0b"></span>一般</div>
-          <div class="legend-row"><span class="ldot" style="background:#f97316"></span>薄弱</div>
-          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#ef4444"></span>最短路径</div>
-          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#16a34a"></span>最轻松</div>
-          <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#2563eb"></span>最扎实</div>
-          <div class="legend-row"><span style="display:inline-block;width:18px;height:0;border-top:2px dashed #94a3b8"></span>相关概念</div>
+        <div v-if="activeNav === 'graph'" class="graph-zoom-tools">
+          <button title="适应画布" aria-label="适应画布" @click="fitGraph">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 3H3v5" />
+              <path d="M16 3h5v5" />
+              <path d="M8 21H3v-5" />
+              <path d="M16 21h5v-5" />
+              <path d="M3 3l6 6" />
+              <path d="M21 3l-6 6" />
+              <path d="M3 21l6-6" />
+              <path d="M21 21l-6-6" />
+            </svg>
+          </button>
+          <button title="放大" aria-label="放大图谱" @click="zoomIn">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" />
+              <path d="M11 8v6" />
+              <path d="M8 11h6" />
+            </svg>
+          </button>
+          <button title="缩小" aria-label="缩小图谱" @click="zoomOut">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" />
+              <path d="M8 11h6" />
+            </svg>
+          </button>
+        </div>
+
+        <div v-if="activeNav === 'graph'" class="graph-legend-area">
+          <div class="floating-legend">
+            <div class="legend-title">图例</div>
+            <div class="legend-row"><span class="ldot" style="background:#2563eb"></span>知识点</div>
+            <div class="legend-row"><span class="ldot" style="background:#16a34a"></span>熟练</div>
+            <div class="legend-row"><span class="ldot" style="background:#f59e0b"></span>一般</div>
+            <div class="legend-row"><span class="ldot" style="background:#f97316"></span>薄弱</div>
+            <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#ef4444"></span>最短路径</div>
+            <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#16a34a"></span>最轻松</div>
+            <div class="legend-row"><span style="display:inline-block;width:18px;height:2px;background:#2563eb"></span>最扎实</div>
+            <div class="legend-row"><span style="display:inline-block;width:18px;height:0;border-top:2px dashed #94a3b8"></span>相关概念</div>
+          </div>
+          <div class="graph-floating-stats" aria-label="图谱统计">
+            <span>{{ nodes.length }} 点</span>
+            <span>{{ links.length }} 边</span>
+          </div>
         </div>
 
         <section v-if="activeNav !== 'graph'" class="workspace-page">
@@ -161,7 +299,7 @@
               <h2>{{ currentNavLabel }}</h2>
               <p>{{ currentNavHint }}</p>
             </div>
-            <button class="soft-button" @click="switchNav('graph')">返回图谱</button>
+            <button class="return-graph-button" @click="switchNav('graph')">返回图谱</button>
           </div>
 
           <div class="workspace-page-body">
@@ -216,6 +354,7 @@
               :studentId="user?.id"
               :courseId="currentCourseId"
               @locate-node="onLocateErrorNode"
+              @training-submitted="onTrainingSubmitted"
             />
 
             <ProfileCenter
@@ -369,7 +508,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
-import { knowledgeApi, graphApi, courseApi, analyticsApi, classroomApi } from '../api/index.js'
+import { knowledgeApi, graphApi } from '../api/index.js'
 import KnowledgeGraph from '../components/KnowledgeGraph.vue'
 import KnowledgeSearch from '../components/KnowledgeSearch.vue'
 import KnowledgePanel from '../components/KnowledgePanel.vue'
@@ -384,27 +523,55 @@ import ResourceLibrary from '../components/ResourceLibrary.vue'
 import ClassLearningReport from '../components/ClassLearningReport.vue'
 import TeachingResearch from '../components/TeachingResearch.vue'
 import SubjectiveReview from '../components/SubjectiveReview.vue'
+import { useClassroomHeatmap } from '../composables/useClassroomHeatmap.js'
+import { useCourses } from '../composables/useCourses.js'
+import { useGraphState } from '../composables/useGraphState.js'
+import { useMastery } from '../composables/useMastery.js'
+import { useToast } from '../composables/useToast.js'
 
 const props = defineProps({ user: { type: Object, default: null } })
 defineEmits(['logout', 'profile-updated'])
+const { showToast } = useToast()
 
 const roleLabel = computed(() => ({ student: '学生', teacher: '教师', admin: '管理员' }[props.user?.role] || '学生'))
 const canEditGraph = computed(() => props.user?.role === 'teacher' || props.user?.role === 'admin')
+const displayName = computed(() => props.user?.nickname || props.user?.name || props.user?.email || '未命名用户')
+const userInitials = computed(() => String(displayName.value || 'U').trim().slice(0, 2).toUpperCase())
+
+function navIcon(content) {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${content}</svg>`
+}
+
+const NAV_ICONS = {
+  graph: navIcon('<circle cx="6" cy="7" r="2.2" /><circle cx="18" cy="6" r="2.2" /><circle cx="12" cy="18" r="2.2" /><path d="M8 8l8-1" /><path d="M7 9l4 7" /><path d="M17 8l-4 8" />'),
+  browse: navIcon('<rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18" /><path d="M7 7h.01" /><path d="M10 7h.01" />'),
+  qa: navIcon('<path d="M4 5h16v10H8l-4 4z" /><path d="M8 9h8" /><path d="M8 12h5" />'),
+  path: navIcon('<circle cx="5" cy="19" r="2" /><circle cx="19" cy="5" r="2" /><path d="M7 19h3a4 4 0 0 0 0-8h4a4 4 0 0 0 4-4" />'),
+  errors: navIcon('<path d="M12 3l9 16H3z" /><path d="M12 9v4" /><path d="M12 17h.01" />'),
+  paper: navIcon('<path d="M6 3h9l3 3v15H6z" /><path d="M14 3v4h4" /><path d="M9 12h6" /><path d="M9 16h4" />'),
+  resources: navIcon('<path d="M4 6h6l2 2h8v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /><path d="M4 10h16" />'),
+  teaching: navIcon('<path d="M4 5h16v11H4z" /><path d="M8 21l4-5 4 5" /><path d="M12 16v5" /><path d="M8 9h8" /><path d="M8 12h5" />'),
+  classReport: navIcon('<path d="M4 20V4" /><path d="M4 20h16" /><path d="M8 16v-5" /><path d="M12 16V8" /><path d="M16 16v-8" />'),
+  review: navIcon('<path d="M5 4h14v16H5z" /><path d="M8 9l2 2 5-5" /><path d="M8 15h8" />'),
+  manage: navIcon('<path d="M4 6h10" /><path d="M18 6h2" /><circle cx="16" cy="6" r="2" /><path d="M4 12h2" /><path d="M10 12h10" /><circle cx="8" cy="12" r="2" /><path d="M4 18h12" /><path d="M20 18h0" /><circle cx="18" cy="18" r="2" />'),
+  admin: navIcon('<rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 15l3-3 3 2 4-6" /><path d="M7 18h10" />'),
+  profile: navIcon('<circle cx="12" cy="8" r="4" /><path d="M4 20a8 8 0 0 1 16 0" />'),
+}
 
 const NAV_DEFS = {
-  graph: { key: 'graph', icon: 'KG', label: '知识图谱', hint: '全局关系视图' },
-  browse: { key: 'browse', icon: 'BR', label: '知识浏览', hint: '搜索与筛选节点' },
-  qa: { key: 'qa', icon: 'AI', label: 'AI 问答', hint: '结合图谱上下文答疑' },
-  path: { key: 'path', icon: 'PT', label: '学习路径', hint: '推荐补习路线' },
-  errors: { key: 'errors', icon: 'ER', label: '错题本', hint: '错题溯源分析' },
-  paper: { key: 'paper', icon: 'EX', label: '智能组卷', hint: '薄弱点专项训练' },
-  resources: { key: 'resources', icon: 'RS', label: '资源库', hint: '资源管理与批量挂载' },
-  teaching: { key: 'teaching', icon: 'TR', label: '备课教研', hint: '课件上传、抽取建图与命题统计' },
-  classReport: { key: 'classReport', icon: 'CR', label: '班级报告', hint: '错题统计与精准教学' },
-  review: { key: 'review', icon: 'RV', label: '主观题批阅', hint: '批阅待处理主观题' },
-  manage: { key: 'manage', icon: 'MG', label: '知识管理', hint: '维护节点与关系' },
-  admin: { key: 'admin', icon: 'AD', label: '数据看板', hint: '平台与知识库运营' },
-  profile: { key: 'profile', icon: 'ME', label: '个人中心', hint: '资料编辑与学习概览' },
+  graph: { key: 'graph', icon: NAV_ICONS.graph, label: '知识图谱', hint: '全局关系视图' },
+  browse: { key: 'browse', icon: NAV_ICONS.browse, label: '知识浏览', hint: '搜索与筛选节点' },
+  qa: { key: 'qa', icon: NAV_ICONS.qa, label: 'AI 问答', hint: '结合图谱上下文答疑' },
+  path: { key: 'path', icon: NAV_ICONS.path, label: '学习路径', hint: '推荐补习路线' },
+  errors: { key: 'errors', icon: NAV_ICONS.errors, label: '错题本', hint: '错题溯源分析' },
+  paper: { key: 'paper', icon: NAV_ICONS.paper, label: '智能组卷', hint: '薄弱点专项训练' },
+  resources: { key: 'resources', icon: NAV_ICONS.resources, label: '资源库', hint: '资源管理与批量挂载' },
+  teaching: { key: 'teaching', icon: NAV_ICONS.teaching, label: '备课教研', hint: '课件上传、抽取建图与命题统计' },
+  classReport: { key: 'classReport', icon: NAV_ICONS.classReport, label: '班级报告', hint: '错题统计与精准教学' },
+  review: { key: 'review', icon: NAV_ICONS.review, label: '主观题批阅', hint: '批阅待处理主观题' },
+  manage: { key: 'manage', icon: NAV_ICONS.manage, label: '知识管理', hint: '维护节点与关系' },
+  admin: { key: 'admin', icon: NAV_ICONS.admin, label: '数据看板', hint: '平台与知识库运营' },
+  profile: { key: 'profile', icon: NAV_ICONS.profile, label: '个人中心', hint: '资料编辑与学习概览' },
 }
 
 const ROLE_NAV_KEYS = {
@@ -413,10 +580,60 @@ const ROLE_NAV_KEYS = {
   admin: ['graph', 'browse', 'resources', 'manage', 'admin'],
 }
 
+const ROLE_NAV_GROUPS = {
+  student: [
+    { title: '学习地图', keys: ['graph', 'browse', 'path'] },
+    { title: '学习助手', keys: ['qa'] },
+    { title: '训练反馈', keys: ['paper', 'errors'] },
+  ],
+  teacher: [
+    { title: '课程建设', keys: ['graph', 'browse', 'manage', 'resources', 'teaching'] },
+    { title: '教学诊断', keys: ['classReport'] },
+    { title: '教学干预', keys: ['review', 'qa'] },
+  ],
+  admin: [
+    { title: '用户治理', keys: ['admin'] },
+    { title: '图谱治理', keys: ['graph', 'browse', 'manage', 'resources'] },
+  ],
+}
+
+const ROLE_ACTIONS = {
+  student: {
+    title: '完成学习闭环',
+    text: '先看图谱定位薄弱点，再生成专项训练，错题会回流到掌握度。',
+    cta: '开始专项训练',
+    nav: 'paper',
+  },
+  teacher: {
+    title: '诊断班级薄弱点',
+    text: '从班级报告查看共性问题，再补资源、调题目、批阅主观题。',
+    cta: '查看班级报告',
+    nav: 'classReport',
+  },
+  admin: {
+    title: '治理图谱质量',
+    text: '检查用户、资源和知识图谱状态，及时处理孤立节点与数据风险。',
+    cta: '打开数据看板',
+    nav: 'admin',
+  },
+}
+
 const navItems = computed(() => {
   const role = props.user?.role || 'student'
   return (ROLE_NAV_KEYS[role] || ROLE_NAV_KEYS.student).map(key => NAV_DEFS[key]).filter(Boolean)
 })
+
+const navGroups = computed(() => {
+  const role = props.user?.role || 'student'
+  return (ROLE_NAV_GROUPS[role] || ROLE_NAV_GROUPS.student)
+    .map(group => ({
+      ...group,
+      items: group.keys.map(key => NAV_DEFS[key]).filter(Boolean),
+    }))
+    .filter(group => group.items.length)
+})
+
+const primaryAction = computed(() => ROLE_ACTIONS[props.user?.role || 'student'] || ROLE_ACTIONS.student)
 
 const currentNav = computed(() => NAV_DEFS[activeNav.value] || NAV_DEFS.graph)
 const currentNavLabel = computed(() => currentNav.value.label)
@@ -425,28 +642,48 @@ const currentNavHint = computed(() => currentNav.value.hint)
 const graphRef = ref(null)
 const pathRecommendRef = ref(null)
 const activeNav = ref('graph')
-const nodes = ref([])
-const links = ref([])
-const categories = ref([])
-const selectedCategory = ref('')
 const selectedNode = ref(null)
 const selectedLink = ref(null)
-const highlightedPath = ref([])
-const highlightedPaths = ref([])
-const searchNodeId = ref(null)
-const courses = ref([])
-const currentCourseId = ref('')
-const currentClassId = ref('')
-const masteryMap = ref({})
-const classes = ref([])
-const heatmapData = ref([])
-const heatmapMode = ref(false)
-const masteredIds = ref([])
+const showNextAction = ref(true)
+const { courses, currentCourseId, loadCourses, selectCourse: setCourse } = useCourses()
+const userId = computed(() => props.user?.id || '')
+const {
+  nodes,
+  links,
+  categories,
+  selectedCategory,
+  highlightedPath,
+  highlightedPaths,
+  searchNodeId,
+  graphPositions,
+  currentGraphViewport,
+  currentGraphLayoutMode,
+  loadGraphPositions,
+  onGraphViewportChange,
+  onGraphLayoutChange,
+  onNodePositionChange,
+  fetchGraph,
+  fetchCategories,
+  clearPath,
+  setPath,
+  removeNodePosition,
+} = useGraphState(currentCourseId, userId)
+const { masteryMap, masteredIds, fetchMastery, updateLocalMastery } = useMastery(userId, currentCourseId)
+const userRef = computed(() => props.user || null)
+const {
+  classes,
+  currentClassId,
+  heatmapData,
+  heatmapMode,
+  fetchClasses,
+  onClassChange,
+  toggleHeatmap,
+} = useClassroomHeatmap(userRef, currentCourseId, fetchGraph)
 const focusedNode = ref(null)
 const graphEditMode = ref(false)
-const graphPositions = ref({})
-const graphViewports = ref({})
-const graphLayoutModes = ref({})
+const exportMenuOpen = ref(false)
+const courseMenuOpen = ref(false)
+const classMenuOpen = ref(false)
 const relationSourceId = ref('')
 const relationDraftType = ref('PREREQUISITE')
 const relationDraftWeight = ref(1)
@@ -456,8 +693,17 @@ const form = ref({ name: '', category: '', difficulty: 1, estimated_time: 0, des
 const relSource = ref('')
 const relTarget = ref('')
 const relType = ref('PREREQUISITE')
-const currentGraphViewport = computed(() => graphViewports.value[currentCourseId.value || 'global'] || null)
-const currentGraphLayoutMode = computed(() => graphLayoutModes.value[currentCourseId.value || 'global'] || 'dagre')
+
+const currentCourseName = computed(() => {
+  const course = courses.value.find(item => item.id === currentCourseId.value)
+  if (course) return course.name
+  return courses.value.length ? '请选择课程' : '暂无课程'
+})
+
+const currentClassName = computed(() => {
+  if (!currentClassId.value) return '全部班级'
+  return classes.value.find(item => item.id === currentClassId.value)?.name || '全部班级'
+})
 
 function displayCategory(cat) {
   if (!cat) return '未分类'
@@ -481,83 +727,22 @@ function relationKey(link) {
   return `${normalizeId(link.source)}->${normalizeId(link.target)}:${link.type || 'RELATED_TO'}`
 }
 
-function positionStorageKey() {
-  return `kg:positions:${currentCourseId.value || 'global'}`
-}
-
-function loadGraphPositions() {
-  try {
-    graphPositions.value = JSON.parse(localStorage.getItem(positionStorageKey()) || '{}')
-  } catch {
-    graphPositions.value = {}
-  }
-}
-
-function saveGraphPositions() {
-  localStorage.setItem(positionStorageKey(), JSON.stringify(graphPositions.value))
-}
-
-function viewportStorageKey() {
-  return currentCourseId.value || 'global'
-}
-
 function recordGraphViewport() {
   const viewport = graphRef.value?.getViewport?.()
   if (viewport) onGraphViewportChange(viewport)
-}
-
-function onGraphViewportChange(viewport) {
-  if (!viewport) return
-  const x = Number(viewport.x)
-  const y = Number(viewport.y)
-  const k = Number(viewport.k)
-  if (![x, y, k].every(Number.isFinite)) return
-  const key = viewportStorageKey()
-  if (viewport.layoutMode) {
-    graphLayoutModes.value = {
-      ...graphLayoutModes.value,
-      [key]: viewport.layoutMode === 'force' ? 'force' : 'dagre',
-    }
-  }
-  graphViewports.value = {
-    ...graphViewports.value,
-    [key]: {
-      x,
-      y,
-      k,
-      layoutMode: viewport.layoutMode,
-    },
-  }
-}
-
-function onGraphLayoutChange(mode) {
-  const key = viewportStorageKey()
-  graphLayoutModes.value = { ...graphLayoutModes.value, [key]: mode === 'force' ? 'force' : 'dagre' }
-  const { [key]: _removed, ...rest } = graphViewports.value
-  graphViewports.value = rest
 }
 
 function toggleGraphEdit(force) {
   if (!canEditGraph.value) return
   graphEditMode.value = typeof force === 'boolean' ? force : !graphEditMode.value
   activeNav.value = 'graph'
+  exportMenuOpen.value = false
   if (!graphEditMode.value) {
     selectedLink.value = null
     relationSourceId.value = ''
     batchMode.value = false
     batchSelectedIds.value = []
   }
-}
-
-function onNodePositionChange(position) {
-  graphPositions.value = {
-    ...graphPositions.value,
-    [position.id]: {
-      x: Math.round(position.x),
-      y: Math.round(position.y),
-    },
-  }
-  saveGraphPositions()
 }
 
 function isNavAllowed(key) {
@@ -568,6 +753,9 @@ function switchNav(key) {
   const nextKey = isNavAllowed(key) ? key : 'graph'
   if (activeNav.value === 'graph' && nextKey !== 'graph') recordGraphViewport()
   activeNav.value = nextKey
+  exportMenuOpen.value = false
+  courseMenuOpen.value = false
+  classMenuOpen.value = false
 }
 
 function onNavClick(key) {
@@ -575,72 +763,21 @@ function onNavClick(key) {
 }
 
 async function selectCourse(courseId) {
-  if (currentCourseId.value === courseId) return
   recordGraphViewport()
-  currentCourseId.value = courseId
-  await onCourseChange()
+  await setCourse(courseId, onCourseChange)
 }
 
-async function fetchGraph() {
-  if (!currentCourseId.value) {
-    nodes.value = []
-    links.value = []
-    return
-  }
-  try {
-    const data = await graphApi.getGraph(selectedCategory.value || undefined, currentCourseId.value, props.user?.id)
-    nodes.value = data.nodes || []
-    links.value = data.links || []
-  } catch (e) {
-    console.error('加载知识图谱失败', e)
-  }
+async function chooseCourse(courseId) {
+  courseMenuOpen.value = false
+  classMenuOpen.value = false
+  await selectCourse(courseId)
 }
 
-async function fetchCategories() {
-  if (!currentCourseId.value) {
-    categories.value = []
-    return
-  }
-  try {
-    categories.value = await graphApi.getCategories(currentCourseId.value)
-  } catch {
-    categories.value = []
-  }
-}
-
-async function fetchCourses() {
-  try {
-    courses.value = await courseApi.list()
-    if (!currentCourseId.value && courses.value.length) {
-      currentCourseId.value = courses.value[0].id
-      await onCourseChange()
-    }
-  } catch {
-    courses.value = []
-  }
-}
-
-async function fetchClasses() {
-  if (props.user?.role === 'teacher') {
-    try {
-      classes.value = await classroomApi.listClasses(props.user.id)
-    } catch {
-      classes.value = []
-    }
-  }
-}
-
-async function fetchMastery() {
-  if (!props.user?.id || !currentCourseId.value) return
-  try {
-    const data = await analyticsApi.calcMastery(props.user.id, currentCourseId.value)
-    const map = {}
-    for (const n of (data.nodes || [])) map[n.node_id] = { score: n.score, level: n.level }
-    masteryMap.value = map
-    masteredIds.value = Object.entries(map).filter(([, v]) => v.score >= 70).map(([id]) => id)
-  } catch {
-    masteryMap.value = {}
-  }
+async function chooseClass(classId) {
+  currentClassId.value = classId
+  classMenuOpen.value = false
+  courseMenuOpen.value = false
+  await onClassChange()
 }
 
 async function onCourseChange() {
@@ -648,37 +785,12 @@ async function onCourseChange() {
   selectedLink.value = null
   relationSourceId.value = ''
   batchSelectedIds.value = []
-  highlightedPath.value = []
-  highlightedPaths.value = []
+  clearPath()
   selectedCategory.value = ''
   loadGraphPositions()
   await fetchGraph()
   await fetchCategories()
   await fetchMastery()
-}
-
-async function onClassChange() {
-  if (heatmapMode.value) await fetchHeatmap()
-}
-
-async function toggleHeatmap() {
-  heatmapMode.value = !heatmapMode.value
-  if (heatmapMode.value && currentClassId.value) await fetchHeatmap()
-  else {
-    heatmapData.value = []
-    await fetchGraph()
-  }
-}
-
-async function fetchHeatmap() {
-  if (!currentClassId.value || !currentCourseId.value) return
-  try {
-    const data = await analyticsApi.classHeatmap(currentClassId.value, currentCourseId.value)
-    heatmapData.value = data.nodes || []
-    await fetchGraph()
-  } catch {
-    heatmapData.value = []
-  }
 }
 
 async function onSelectNode(node, meta = {}) {
@@ -738,11 +850,7 @@ function onLocateErrorNode(nodeId) {
 }
 
 function onPathFound(pathNodes, _totalTime, _type, pathGroups = []) {
-  highlightedPath.value = pathNodes.map(n => n.id)
-  highlightedPaths.value = pathGroups.map(group => ({
-    ...group,
-    nodes: (group.path || []).map(node => node.id),
-  }))
+  setPath(pathNodes, pathGroups)
 }
 
 async function onShowRoadmap(targetId) {
@@ -753,8 +861,7 @@ async function onShowRoadmap(targetId) {
 }
 
 function onClearPath() {
-  highlightedPath.value = []
-  highlightedPaths.value = []
+  clearPath()
 }
 
 function onAskAI(node) {
@@ -776,11 +883,7 @@ async function onManualMasteryUpdated(payload) {
   const nodeId = payload?.node_id
   const score = Number(payload?.score || 0)
   if (nodeId) {
-    const level = score >= 85 ? 'proficient' : score >= 60 ? 'fair' : score > 0 ? 'weak' : 'unlearned'
-    masteryMap.value = {
-      ...masteryMap.value,
-      [nodeId]: { ...(masteryMap.value[nodeId] || {}), score, level, manual_score: score },
-    }
+    const level = updateLocalMastery(nodeId, score)
     nodes.value = nodes.value.map(node => (
       node.id === nodeId
         ? { ...node, mastery_score: score, mastery_level: level, manual_score: score }
@@ -794,12 +897,31 @@ async function onManualMasteryUpdated(payload) {
   await fetchGraph()
 }
 
+async function onTrainingSubmitted() {
+  await fetchMastery()
+  await fetchGraph()
+  if (selectedNode.value && pathRecommendRef.value?.fetchPath) {
+    await pathRecommendRef.value.fetchPath(selectedNode.value.id)
+  }
+}
+
+function fitGraph() {
+  if (graphRef.value?.fitToScreen) graphRef.value.fitToScreen()
+}
+
 function zoomIn() {
   if (graphRef.value?.zoomBy) graphRef.value.zoomBy(1.18)
 }
 
 function zoomOut() {
   if (graphRef.value?.zoomBy) graphRef.value.zoomBy(0.86)
+}
+
+function exportGraph(format) {
+  exportMenuOpen.value = false
+  if (format === 'svg') graphRef.value?.exportSVG?.()
+  else if (format === 'json') graphRef.value?.exportJSON?.()
+  else if (format === 'csv') graphRef.value?.exportCSV?.()
 }
 
 async function onSaveNode(node, payload) {
@@ -809,8 +931,8 @@ async function onSaveNode(node, payload) {
     nodes.value = nodes.value.map(n => n.id === updated.id ? updated : n)
     selectedNode.value = updated
     await fetchCategories()
-  } catch {
-    alert('保存知识点失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '保存知识点失败', 'error')
   }
 }
 
@@ -834,8 +956,8 @@ async function createRelationByIds(source, target, type = 'PREREQUISITE', weight
     await graphApi.createRelation(source, target, type, weight)
     await fetchGraph()
     return true
-  } catch {
-    alert('建立关系失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '建立关系失败', 'error')
     return false
   }
 }
@@ -867,8 +989,8 @@ async function onSaveLink(link, payload) {
     )
     await fetchGraph()
     selectedLink.value = { ...updated, key: relationKey(updated) }
-  } catch {
-    alert('保存关系失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '保存关系失败', 'error')
   }
 }
 
@@ -878,8 +1000,8 @@ async function onDeleteLink(link) {
     await graphApi.deleteRelation(normalizeId(link.source), normalizeId(link.target), link.type)
     selectedLink.value = null
     await fetchGraph()
-  } catch {
-    alert('删除关系失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '删除关系失败', 'error')
   }
 }
 
@@ -897,8 +1019,8 @@ async function onBatchUpdate(payload) {
     await Promise.all(batchSelectedIds.value.map(id => knowledgeApi.update(id, payload)))
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('批量更新失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '批量更新失败', 'error')
   }
 }
 
@@ -910,8 +1032,8 @@ async function onBatchDelete() {
     batchSelectedIds.value = []
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('批量删除失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '批量删除失败', 'error')
   }
 }
 
@@ -923,8 +1045,8 @@ async function onCreateNodeFromEditor(payload) {
     selectedLink.value = null
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('创建知识点失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '创建知识点失败', 'error')
   }
 }
 
@@ -942,8 +1064,8 @@ async function onCreateNode() {
     form.value = { name: '', category: '', difficulty: 1, estimated_time: 0, description: '' }
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('创建失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '创建失败', 'error')
   }
 }
 
@@ -951,15 +1073,14 @@ async function onDeleteNode(node = selectedNode.value) {
   if (!node || !confirm('确认删除：' + node.name + '？')) return
   try {
     await knowledgeApi.delete(node.id)
-    delete graphPositions.value[node.id]
-    saveGraphPositions()
+    removeNodePosition(node.id)
     selectedNode.value = null
     selectedLink.value = null
     batchSelectedIds.value = batchSelectedIds.value.filter(id => id !== node.id)
     await fetchGraph()
     await fetchCategories()
-  } catch {
-    alert('删除失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '删除失败', 'error')
   }
 }
 
@@ -974,13 +1095,13 @@ async function onCreateRelation() {
       key: `${relSource.value}->${relTarget.value}:${relType.value}`,
     }
     await fetchGraph()
-  } catch {
-    alert('建立关系失败')
+  } catch (err) {
+    showToast(err.normalizedMessage || '建立关系失败', 'error')
   }
 }
 
 onMounted(async () => {
-  await fetchCourses()
+  await loadCourses(onCourseChange)
   await fetchClasses()
 })
 </script>

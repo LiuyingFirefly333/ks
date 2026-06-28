@@ -113,6 +113,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { examApi } from '../api/index.js'
+import { useToast } from '../composables/useToast.js'
 
 const props = defineProps({
   classes: { type: Array, default: () => [] },
@@ -124,6 +125,7 @@ defineEmits(['locate-node'])
 
 const loading = ref(false)
 const savingId = ref('')
+const { showToast } = useToast()
 const reviews = ref([])
 const filters = reactive({
   class_id: props.classId || '',
@@ -194,7 +196,7 @@ async function submitGrade(item) {
       : row)
     ensureForm(reviews.value.find(row => row.attempt.id === id))
   } catch (err) {
-    alert(err.normalizedMessage || '批阅提交失败')
+    showToast(err.normalizedMessage || '批阅提交失败', 'error')
   } finally {
     savingId.value = ''
   }
